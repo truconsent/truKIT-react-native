@@ -18,26 +18,21 @@ import {
 } from 'react-native';
 import RightsCenterApi, {
   ConsentGroup,
-  Purpose,
+  FlatPurpose,
   DPOInfo,
   Nominee,
   GrievanceTicket,
   ConsentPayload,
 } from '../services/rightsCenterApi';
 import { deriveThemeColors } from '../utils/ColorUtils';
+import { DEFAULT_API_URL } from '../core/BannerService';
 
 export interface NativeRightCenterProps {
   userId: string;
   apiKey?: string;
   organizationId?: string;
-  /**
-   * Web SDK parity: full API base (e.g. includes `/api/v1` routes).
-   * Optional for now; used when implementing full parity.
-   */
   apiUrl?: string;
-  /** Web SDK parity */
   assetId?: string;
-  /** Web SDK parity: token-based auth. */
   token?: string;
   authToken?: string;
 }
@@ -74,7 +69,7 @@ const DEFAULT_RIGHTS_CENTER_SETTINGS: Partial<import('../services/rightsCenterAp
 export default function NativeRightCenter({
   userId,
   apiKey = '',
-  organizationId = 'mars-money',
+  organizationId = '',
   apiUrl,
   assetId,
 }: NativeRightCenterProps) {
@@ -85,9 +80,13 @@ export default function NativeRightCenter({
 
   const [activeTab, setActiveTab] = useState('Consent');
 
+  // Single API instance — same key for all calls, same as website
   const [api] = useState(
-    () => new RightsCenterApi(apiUrl ?? '', apiKey, organizationId, userId)
+    () => new RightsCenterApi(apiUrl ?? DEFAULT_API_URL, apiKey, organizationId, userId)
   );
+
+  // Generate a stable session ID for this Rights Center session
+  const [sessionId] = useState(() => `rn-rc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
   const theme = useMemo(
     () => deriveThemeColors({
@@ -119,12 +118,18 @@ export default function NativeRightCenter({
   }, [tabs, activeTab]);
   
   // Consent state
-  const [consentGroups, setConsentGroups] = useState<ConsentGroup[]>([]);
-  const [initialConsentGroups, setInitialConsentGroups] = useState<ConsentGroup[]>([]);
+  const [consents, setConsents] = useState<FlatPurpose[]>([]);
+  const [initialConsents, setInitialConsents] = useState<Record<string, string>>({});
   const [consentsLoading, setConsentsLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
+  const [changedPurposeIds, setChangedPurposeIds] = useState<Set<string>>(new Set());
+  const [showSaveSuccess, setShowSaveSuccess] = useState(false);
   const [modalData, setModalData] = useState<any>(null);
   const [showSaveModal, setShowSaveModal] = useState(false);
+
+  // Legacy compat (used by old ConsentTab rendering path)
+  const [consentGroups, setConsentGroups] = useState<ConsentGroup[]>([]);
+  const [initialConsentGroups, setInitialConsentGroups] = useState<ConsentGroup[]>([]);
   
   // Rights state
   const [showAccessModal, setShowAccessModal] = useState(false);
@@ -165,23 +170,51 @@ export default function NativeRightCenter({
   // Nominee dropdown state
   const [showRelationshipDropdown, setShowRelationshipDropdown] = useState(false);
 
-  // Fetch consents (web logic is implemented in the SDK api client).
+  // Fetch consents using new FlatPurpose-based API
   const fetchUserConsents = async () => {
     setConsentsLoading(true);
     try {
-      const merged = await api
-        .getUserConsents(userId, assetId)
-        .catch((err) => {
-          console.warn('[NativeRightCenter] Error fetching user consents:', err);
-          return [];
-        });
+      const data = await api.fetchUserConsents(userId, assetId).catch((err) => {
+        console.warn('[NativeRightCenter] fetchUserConsents failed, falling back to getUserConsents:', err);
+        return null;
+      });
 
-      setConsentGroups(merged);
-      setInitialConsentGroups(JSON.parse(JSON.stringify(merged)));
+      if (data !== null) {
+        setConsents(data);
+        const map: Record<string, string> = {};
+        data.forEach((p) => { map[p.id] = p.consented; });
+        setInitialConsents(map);
+      } else {
+        // Fallback: use old getUserConsents and adapt to flat list
+        const groups = await api.getUserConsents(userId, assetId).catch(() => []);
+        const flat: FlatPurpose[] = groups.flatMap((cp) =>
+          (cp.purposes || []).map((p) => ({
+            id: p.id,
+            name: p.name,
+            title: p.name,
+            description: p.description,
+            expiry_period: p.expiry_period,
+            is_mandatory: p.is_mandatory,
+            consented: p.consented === 'accepted' ? ('accepted' as const) : ('declined' as const),
+            isLegitimate: false,
+            dataElements: (cp.data_elements || []) as any[],
+            processingActivities: [],
+            type: (p.is_mandatory ? 'Mandatory' : 'Optional') as 'Mandatory' | 'Optional',
+            timestamp: 0,
+          }))
+        );
+        setConsents(flat);
+        const map: Record<string, string> = {};
+        flat.forEach((p) => { map[p.id] = p.consented; });
+        setInitialConsents(map);
+        // Keep legacy state in sync for old ConsentTab
+        setConsentGroups(groups);
+        setInitialConsentGroups(JSON.parse(JSON.stringify(groups)));
+      }
     } catch (error: any) {
       console.error('[NativeRightCenter] Error fetching consents:', error);
-      setConsentGroups([]);
-      setInitialConsentGroups([]);
+      setConsents([]);
+      setInitialConsents({});
     } finally {
       setConsentsLoading(false);
     }
@@ -288,104 +321,59 @@ export default function NativeRightCenter({
   }, [userId, assetId]);
 
   // Consent handlers
-  const handleToggle = (consentId: string, collectionId: string) => {
-    setConsentGroups((prev) =>
-      prev.map((cp) =>
-        cp.collection_point === collectionId
-          ? {
-              ...cp,
-              purposes: (cp.purposes || []).map((p) =>
-                p.id === consentId
-                  ? { ...p, consented: p.consented === 'accepted' ? 'declined' : 'accepted' }
-                  : p
-              ),
-            }
-          : cp
+  const handleToggle = (purposeId: string) => {
+    setConsents((prev) =>
+      prev.map((p) =>
+        p.id === purposeId
+          ? { ...p, consented: p.consented === 'accepted' ? 'declined' : 'accepted' }
+          : p
       )
     );
+    setChangedPurposeIds((prev) => {
+      const next = new Set(prev);
+      // If toggling back to initial state, remove from changed set
+      const currentPurpose = consents.find((p) => p.id === purposeId);
+      if (currentPurpose) {
+        const newConsented = currentPurpose.consented === 'accepted' ? 'declined' : 'accepted';
+        if (newConsented === initialConsents[purposeId]) {
+          next.delete(purposeId);
+        } else {
+          next.add(purposeId);
+        }
+      } else {
+        next.add(purposeId);
+      }
+      return next;
+    });
     setDirty(true);
   };
 
   const handleSave = async () => {
     try {
-      const initialStateByCollection = new Map();
-      initialConsentGroups.forEach((cp) => {
-        const purposeMap = new Map();
-        (cp.purposes || []).forEach((p) => {
-          purposeMap.set(p.id, p.consented);
-        });
-        initialStateByCollection.set(cp.collection_point, purposeMap);
-      });
+      const changedPurposes = consents
+        .filter((c) => changedPurposeIds.has(c.id))
+        .map((c) => ({ id: c.id, name: c.name, consented: c.consented as 'accepted' | 'declined' }));
 
-      const byCollection: Record<string, any[]> = {};
-      const changedByCollection: Record<string, string[]> = {};
+      if (changedPurposes.length === 0) {
+        setDirty(false);
+        return;
+      }
 
-      consentGroups.forEach((cp) => {
-        (cp.purposes || []).forEach((p) => {
-          if (!byCollection[cp.collection_point]) {
-            byCollection[cp.collection_point] = [];
-            changedByCollection[cp.collection_point] = [];
-          }
-          byCollection[cp.collection_point].push(p);
-
-          const collectionInitialState = initialStateByCollection.get(cp.collection_point);
-          const initialStatus = collectionInitialState?.get(p.id);
-          const safeInitial = initialStatus || 'declined';
-
-          if (safeInitial !== p.consented) {
-            changedByCollection[cp.collection_point].push(p.id);
-          }
-        });
-      });
-
-      await Promise.all(
-        Object.entries(byCollection)
-          .filter(([collectionId]) => changedByCollection[collectionId]?.length > 0)
-          .map(([collectionId, list]) => {
-            const changedIds = new Set(changedByCollection[collectionId] || []);
-            const collectionInitialState = initialStateByCollection.get(collectionId);
-
-            const purposesPayload = list
-              .filter((p) => changedIds.has(p.id))
-              .map((p) => {
-                const initialStatus = collectionInitialState?.get(p.id) || 'declined';
-                return {
-                  id: p.id,
-                  name: p.name,
-                  consented: p.consented,
-                  initialStatus,
-                };
-              });
-
-            const hasRevocation = purposesPayload.some(
-              (p: any) => p.initialStatus === 'accepted' && p.consented === 'declined'
-            );
-            const hasApproval = purposesPayload.some((p: any) => p.consented === 'accepted');
-
-            const action = hasRevocation ? 'revoked' : hasApproval ? 'approved' : 'declined';
-
-            const payload: ConsentPayload = {
-              userId,
-              purposes: purposesPayload.map(({ initialStatus, ...rest }: any) => rest),
-              action: action as 'approved' | 'revoked' | 'declined',
-              assetId,
-            };
-
-            if (changedByCollection[collectionId]?.length > 0) {
-              (payload as any).changedPurposes = changedByCollection[collectionId];
-            }
-
-            return api.saveConsent(collectionId, payload);
-          })
-      );
+      await api.saveConsentFromRightsCenter(userId, changedPurposes, assetId, sessionId);
 
       setDirty(false);
-      setShowSaveModal(true);
-      // Refresh consents after save - errors are handled gracefully in fetchUserConsents
-      fetchUserConsents().catch((err) => {
-        // Silently handle refresh errors - save was successful
-        console.log('[NativeRightCenter] Note: Error refreshing consents after save (this is non-critical):', err);
-      });
+      setChangedPurposeIds(new Set());
+      setShowSaveSuccess(true);
+      setTimeout(() => setShowSaveSuccess(false), 3000);
+
+      // Re-fetch to get server-confirmed state
+      const fresh = await api.fetchUserConsents(userId, assetId).catch(() => null);
+      if (fresh) {
+        setConsents(fresh);
+        const map: Record<string, string> = {};
+        fresh.forEach((p) => { map[p.id] = p.consented; });
+        setInitialConsents(map);
+      }
     } catch (error: any) {
       console.error('[NativeRightCenter] Error saving consents:', error);
       Alert.alert('Error', 'Failed to save consent changes. Please try again.');
@@ -584,9 +572,10 @@ export default function NativeRightCenter({
           <ConsentTab
             theme={theme}
             settings={rightsCenterSettings}
-            consentGroups={consentGroups}
+            consents={consents}
             consentsLoading={consentsLoading}
             dirty={dirty}
+            showSaveSuccess={showSaveSuccess}
             onToggle={handleToggle}
             onSave={handleSave}
             onInfoClick={setModalData}
@@ -839,8 +828,8 @@ function SelectDropdown({ label, placeholder, value, options, onSelect, visible,
   );
 }
 
-// Tab Components (to be implemented in next steps)
-function ConsentTab({ theme, settings, consentGroups, consentsLoading, dirty, onToggle, onSave, onInfoClick }: any) {
+// Tab Components
+function ConsentTab({ theme, settings, consents, consentsLoading, dirty, showSaveSuccess, onToggle, onSave, onInfoClick }: any) {
   if (consentsLoading) {
     return (
       <View style={styles.centerContent}>
@@ -850,24 +839,25 @@ function ConsentTab({ theme, settings, consentGroups, consentsLoading, dirty, on
     );
   }
 
-  const getDataElementsText = (purpose: any, collectionPoint: ConsentGroup) => {
-    const purposeElements = Array.isArray(purpose.data_elements) ? purpose.data_elements : [];
-    if (purposeElements.length > 0) {
-      return purposeElements
-        .map((el: any) =>
-          typeof el === 'string' || typeof el === 'number'
-            ? String(el)
-            : el?.name || el?.label || el?.title || el?.id
-        )
-        .filter(Boolean)
-        .join(', ');
-    }
-
-    const cpElements = Array.isArray(collectionPoint.data_elements) ? collectionPoint.data_elements : [];
-    return cpElements
-      .map((el: any) => el?.name || el?.label || el?.title || el?.id)
+  const getDataElementsText = (p: FlatPurpose) => {
+    const elements = Array.isArray(p.dataElements) ? p.dataElements : [];
+    return elements
+      .map((el: any) =>
+        typeof el === 'string' || typeof el === 'number'
+          ? String(el)
+          : el?.name || el?.label || el?.title || el?.id
+      )
       .filter(Boolean)
       .join(', ') || 'Not specified';
+  };
+
+  const getProcessingText = (p: FlatPurpose) => {
+    const acts = Array.isArray(p.processingActivities) ? p.processingActivities : [];
+    if (acts.length === 0) return 'Not specified';
+    return acts
+      .map((a: any) => (typeof a === 'string' ? a : a?.name || a?.title || String(a)))
+      .filter(Boolean)
+      .join(', ');
   };
 
   return (
@@ -885,94 +875,89 @@ function ConsentTab({ theme, settings, consentGroups, consentsLoading, dirty, on
         )}
       </View>
 
-      {consentGroups.length === 0 ? (
+      {showSaveSuccess && (
+        <View style={styles.successBanner}>
+          <Text style={styles.successBannerText}>Consent preferences saved successfully!</Text>
+        </View>
+      )}
+
+      {consents.length === 0 ? (
         <View style={styles.centerContent}>
           <Text style={styles.emptyText}>You currently have no consent records to display.</Text>
         </View>
       ) : (
-        <ScrollView>
-          {consentGroups.flatMap((cp: ConsentGroup) =>
-            (cp.purposes || []).map((p: any) => (
-              <View key={`${cp.collection_point}-${p.id}`} style={[styles.purposeCard, { borderColor: theme.border }]}>
-                {/* Header Row: Purpose name, badge, and toggle */}
-                <View style={styles.cardHeaderRow}>
-                  <View style={styles.purposeHeaderLeft}>
-                    <Text style={[styles.purposeTitle, { color: theme.textPrimary }]}>{p.name}</Text>
-                    <Text
-                      style={[
-                        styles.badge,
-                        p.is_mandatory ? styles.badgeMandatory : styles.badgeOptional,
-                      ]}
-                    >
-                      {p.is_mandatory ? 'Necessary' : 'Optional'}
-                    </Text>
-                  </View>
-                  <View style={styles.toggleSection}>
-                    <Switch
-                      value={p.consented === 'accepted'}
-                      onValueChange={() => onToggle(p.id, cp.collection_point)}
-                      trackColor={{ false: '#ccc', true: theme.button }}
-                    />
-                  </View>
-                </View>
-
-                {/* Expiry Period */}
-                <View style={styles.metaRow}>
-                  <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Expiry Period:</Text>
-                  <Text style={[styles.metaValue, { color: theme.textPrimary }]}>
-                    {p.expiry_period || 'Not specified'}
+        <View>
+          {(consents as FlatPurpose[]).map((p) => (
+            <View key={p.id} style={[styles.purposeCard, { borderColor: theme.border }]}>
+              {/* Header Row: Purpose name, badge, legitimate badge, and toggle */}
+              <View style={styles.cardHeaderRow}>
+                <View style={styles.purposeHeaderLeft}>
+                  <Text style={[styles.purposeTitle, { color: theme.textPrimary }]}>{p.name}</Text>
+                  <Text
+                    style={[
+                      styles.badge,
+                      p.is_mandatory ? styles.badgeMandatory : styles.badgeOptional,
+                    ]}
+                  >
+                    {p.is_mandatory ? 'Necessary' : 'Optional'}
                   </Text>
+                  {p.isLegitimate && (
+                    <Text style={styles.badgeLegitimate}>Legitimate Interest</Text>
+                  )}
                 </View>
-
-                {/* Processing Activity */}
-                <View style={styles.metaRow}>
-                  <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Processing Activity:</Text>
-                  <Text style={[styles.metaValue, { color: theme.textPrimary }]}>
-                    {p.processing_activity || cp.title || 'Not specified'}
-                  </Text>
+                <View style={styles.toggleSection}>
+                  <Switch
+                    value={p.consented === 'accepted'}
+                    onValueChange={() => !p.isLegitimate && onToggle(p.id)}
+                    disabled={p.isLegitimate}
+                    trackColor={{ false: '#ccc', true: theme.button }}
+                  />
                 </View>
+              </View>
 
-                {/* Show and Consented Status */}
-                <View style={styles.statusRow}>
-                  <View style={styles.statusItem}>
-                    <Text style={[styles.statusLabel, { color: theme.textSecondary }]}>Show:</Text>
-                    <Text
-                      style={[
-                        styles.statusValue,
-                        cp.shown_to_principal
-                          ? { backgroundColor: theme.button, color: theme.buttonText }
-                          : { backgroundColor: '#1f2937', color: '#ffffff' },
-                      ]}
-                    >
-                      {cp.shown_to_principal ? 'Yes' : 'No'}
-                    </Text>
-                  </View>
-                  <View style={styles.statusItem}>
-                    <Text style={[styles.statusLabel, { color: theme.textSecondary }]}>Consented:</Text>
-                    <Text
-                      style={[
-                        styles.statusValue,
-                        p.consented === 'accepted'
-                          ? { backgroundColor: theme.button, color: theme.buttonText }
-                          : { backgroundColor: '#ef4444', color: '#ffffff' },
-                      ]}
-                    >
-                      {p.consented === 'accepted' ? 'Yes' : 'No'}
-                    </Text>
-                  </View>
-                </View>
+              {/* Expiry Period */}
+              <View style={styles.metaRow}>
+                <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Expiry:</Text>
+                <Text style={[styles.metaValue, { color: theme.textPrimary }]}>
+                  {p.expiry_period || 'Not specified'}
+                </Text>
+              </View>
 
-                {/* Data Elements */}
-                <View style={styles.metaRow}>
-                  <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Data Elements:</Text>
-                  <Text style={[styles.metaValue, { color: theme.textPrimary }]}>
-                    {getDataElementsText(p, cp)}
+              {/* Processing Activity */}
+              <View style={styles.metaRow}>
+                <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Processing:</Text>
+                <Text style={[styles.metaValue, { color: theme.textPrimary }]}>
+                  {getProcessingText(p)}
+                </Text>
+              </View>
+
+              {/* Consented Status pill */}
+              <View style={styles.statusRow}>
+                <View style={styles.statusItem}>
+                  <Text style={[styles.statusLabel, { color: theme.textSecondary }]}>Consented:</Text>
+                  <Text
+                    style={[
+                      styles.statusValue,
+                      p.consented === 'accepted'
+                        ? { backgroundColor: theme.button, color: theme.buttonText }
+                        : { backgroundColor: '#ef4444', color: '#ffffff' },
+                    ]}
+                  >
+                    {p.consented === 'accepted' ? 'Yes' : 'No'}
                   </Text>
                 </View>
               </View>
-            ))
-          )}
-        </ScrollView>
+
+              {/* Data Elements chips */}
+              <View style={styles.metaRow}>
+                <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Data Elements:</Text>
+                <Text style={[styles.metaValue, { color: theme.textPrimary }]}>
+                  {getDataElementsText(p)}
+                </Text>
+              </View>
+            </View>
+          ))}
+        </View>
       )}
     </View>
   );
@@ -1936,6 +1921,26 @@ const styles = StyleSheet.create({
   badgeOptional: {
     backgroundColor: '#dbeafe',
     color: '#0c4a6e',
+  },
+  badgeLegitimate: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    fontSize: 12,
+    fontWeight: '600',
+    backgroundColor: '#fef3c7',
+    color: '#92400e',
+  },
+  successBanner: {
+    backgroundColor: '#dcfce7',
+    borderRadius: 6,
+    padding: 12,
+    marginBottom: 12,
+  },
+  successBannerText: {
+    color: '#166534',
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });
 

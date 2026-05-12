@@ -2,7 +2,6 @@
  * Rights Center API Service
  * Handles all API calls for the Rights Center feature
  */
-import { Platform } from 'react-native';
 
 export interface ConsentGroup {
   collection_point: string;
@@ -32,6 +31,23 @@ export interface DPOInfo {
   appointment_date?: string;
   qualifications?: string;
   responsibilities?: string;
+  working_hours?: string;
+  response_time?: string;
+}
+
+export interface FlatPurpose {
+  id: string;
+  name: string;
+  title: string;
+  description?: string;
+  expiry_period?: string;
+  is_mandatory: boolean;
+  consented: 'accepted' | 'declined';
+  isLegitimate: boolean;
+  dataElements: any[];
+  processingActivities: any[];
+  type: 'Mandatory' | 'Optional';
+  timestamp: number;
 }
 
 export interface Nominee {
@@ -113,34 +129,30 @@ class RightsCenterApi {
   }
 
   constructor(baseUrl: string, apiKey: string, organizationId: string, userId?: string) {
-    this.baseUrl = this.normalizeMobileLoopback(baseUrl).replace(/\/$/, '');
+    this.baseUrl = (baseUrl || '').replace(/\/$/, '');
     this.apiRootUrl = this.baseUrl.replace(/\/banners\/?$/, '');
     this.apiKey = apiKey;
     this.organizationId = organizationId;
     this.userId = userId;
   }
 
-  private normalizeMobileLoopback(url: string): string {
-    if (!url) return url;
-    // Android emulator cannot reach host machine via localhost/127.0.0.1.
-    // Use 10.0.2.2, which maps to host loopback.
-    if (Platform.OS === 'android') {
-      return url
-        .replace('://localhost:', '://10.0.2.2:')
-        .replace('://127.0.0.1:', '://10.0.2.2:');
-    }
-    return url;
-  }
-
-  private getHeaders(): Record<string, string> {
+  private getHeaders(isSdkPath = false): Record<string, string> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-API-Key': this.apiKey || '',
       'X-Org-Id': this.organizationId || '',
-      "X-Tenant": "mars-money",
     };
     if (this.userId) {
       headers['X-User-Id'] = this.userId;
+    }
+    // Backend OriginEnforcementMiddleware blocks /api/v1/internal/consent* and /api/v1/internal/banners*
+    // unless the request looks like a browser (sec-fetch-site present OR mozilla/ in user-agent).
+    // React Native fetch doesn't send these automatically, so we add them manually for SDK paths.
+    if (isSdkPath) {
+      headers['Sec-Fetch-Site'] = 'cross-site';
+      headers['User-Agent'] = 'Mozilla/5.0 TruConsent-ReactNative-SDK/1.0';
+      // Do NOT send Origin — backend defaults to COLLECTOR_BASE_URL which is always authorized.
+      // Sending the API URL as Origin causes 403 "Origin not authorized".
     }
     return headers;
   }
@@ -224,6 +236,14 @@ class RightsCenterApi {
    * TruAPI request helper (`/api/v1/...` routes).
    * Uses `apiRootUrl` derived from the legacy `apiBaseUrl`.
    */
+  private isSdkEndpoint(endpoint: string): boolean {
+    return (
+      endpoint.startsWith('/api/v1/internal/consent') ||
+      endpoint.startsWith('/api/v1/internal/banners') ||
+      endpoint.startsWith('/api/v1/internal/sdk')
+    );
+  }
+
   private async requestApi<T>(
     endpoint: string,
     options: RequestInit = {}
@@ -231,7 +251,7 @@ class RightsCenterApi {
     const cleanBaseUrl = this.apiRootUrl.replace(/\/$/, '');
     const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
     const url = `${cleanBaseUrl}${cleanEndpoint}`;
-    const headers = { ...this.getHeaders(), ...(options.headers || {}) };
+    const headers = { ...this.getHeaders(this.isSdkEndpoint(endpoint)), ...(options.headers || {}) };
 
     try {
       console.log('[RightsCenterApi] Request (api):', url);
@@ -348,7 +368,7 @@ class RightsCenterApi {
   async getRightsCenterSettings(assetId?: string): Promise<RightsCenterSettings> {
     const assetQuery = assetId ? `?asset_id=${encodeURIComponent(assetId)}` : '';
     const payload = await this.requestApi<any>(
-      `/api/v1/rights-center/settings/global${assetQuery}`
+      `/api/v1/internal/rights-center/settings/global${assetQuery}`
     );
 
     // TruAPI may wrap in `{ data: {...} }`
@@ -357,87 +377,35 @@ class RightsCenterApi {
   }
 
   async createAccessRequest(userId: string, assetId?: string): Promise<void> {
-    const metadata = {
-      asset_id: assetId,
-      source: 'rights_center',
-      requested_at: new Date().toISOString(),
-    };
-
-    try {
-      await this.requestApi('/api/v1/rights-requests/access-request', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: userId,
-          status: 'pending',
-          metadata,
-        }),
-      });
-    } catch (error: any) {
-      if (!this.isRightsRequestRouteMismatch(error)) {
-        throw error;
-      }
-
-      // Do NOT fallback to grievance for access requests.
-      // Access and deletion must both be logged in right_center_request (Request Logs).
-      // Retry a trailing-slash variant for proxy/router compatibility.
-      try {
-        await this.requestApi('/api/v1/rights-requests/access-request/', {
-          method: 'POST',
-          body: JSON.stringify({
-            user_id: userId,
-            status: 'pending',
-            metadata,
-          }),
-        });
-        return;
-      } catch {
-        throw new Error(
-          'Access request endpoint is misrouted in this environment. Access requests are restricted to Request Logs only and will not be sent to Grievance.'
-        );
-      }
-    }
+    // Same payload as mars-money-website RightCenter.jsx
+    await this.requestApi('/api/v1/internal/rights-requests/access-request', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: userId,
+        subject: 'Data Access Request',
+        description: 'User requested access to personal data from Rights Center.',
+        metadata: {
+          asset_id: assetId,
+          source: 'Rights Center',
+        },
+      }),
+    });
   }
 
   async createDeletionRequest(userId: string, assetId?: string): Promise<void> {
-    const metadata = {
-      asset_id: assetId,
-      source: 'rights_center',
-      requested_at: new Date().toISOString(),
-    };
-
-    try {
-      await this.requestApi('/api/v1/rights-requests/deletion-request', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: userId,
-          status: 'pending',
-          metadata,
-        }),
-      });
-    } catch (error: any) {
-      if (!this.isRightsRequestRouteMismatch(error)) {
-        throw error;
-      }
-
-      // Do NOT fallback to grievance deletion endpoint.
-      // Deletion requests must be logged only in right_center_request (Request Logs).
-      // Retry a trailing-slash variant for proxy/router compatibility.
-      try {
-        await this.requestApi('/api/v1/rights-requests/deletion-request/', {
-          method: 'POST',
-          body: JSON.stringify({
-            user_id: userId,
-            status: 'pending',
-            metadata,
-          }),
-        });
-        return;
-      } catch {
-        throw new Error(
-          'Deletion request endpoint is misrouted in this environment. Deletion requests are restricted to Request Logs only and will not be sent to Grievance.'
-        );
-      }
-    }
+    // Same payload as mars-money-website RightCenter.jsx
+    await this.requestApi('/api/v1/internal/rights-requests/deletion-request', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: userId,
+        reason: 'User requested data deletion from Rights Center',
+        metadata: {
+          asset_id: assetId,
+          requested_at: new Date().toISOString(),
+          source: 'Rights Center',
+        },
+      }),
+    });
   }
 
   // Consent endpoints
@@ -459,17 +427,13 @@ class RightsCenterApi {
       return 'declined';
     };
 
-    const firstDefined = (...values: any[]) =>
-      values.find((v) => v !== undefined && v !== null && String(v) !== '');
-
+    // Same as website: GET /api/v1/internal/consent?asset_id=...
     const assetQuery = assetId ? `?asset_id=${encodeURIComponent(assetId)}` : '';
-    const userPath = `/api/v1/banners/user/${encodeURIComponent(userId)}${assetQuery}`;
-    const allPath = `/api/v1/banners${assetQuery}`;
+    const sourceRows = normalizeArrayResponse(
+      await this.requestApi<any>(`/api/v1/internal/consent${assetQuery}`)
+    );
 
-    const userRows = normalizeArrayResponse(await this.requestApi<any>(userPath));
-    const sourceRows = userRows.length > 0 ? userRows : normalizeArrayResponse(await this.requestApi<any>(allPath));
-
-    let merged: ConsentGroup[] = sourceRows.map((cp: any) => {
+    const merged: ConsentGroup[] = sourceRows.map((cp: any) => {
       const cpId = String(cp?.collection_point || cp?.id || '');
       const shown_to_principal = !!cp?.shown_to_principal;
       const purposes: Purpose[] = (cp?.purposes || []).map((p: any) => ({
@@ -490,14 +454,6 @@ class RightsCenterApi {
         purposes,
       } as ConsentGroup;
     });
-
-    // If assetId was provided, keep only matching collection points (web behavior).
-    if (assetId) {
-      merged = merged.filter((cp: any) => {
-        const cpAssetId = firstDefined(cp?.asset?.id, cp?.asset_id, cp?.assetId, '');
-        return String(cpAssetId) === String(assetId);
-      });
-    }
 
     return merged;
   }
@@ -520,8 +476,8 @@ class RightsCenterApi {
       return 'declined';
     };
 
-    const assetQuery = assetId ? `?asset_id=${encodeURIComponent(assetId)}` : '';
-    const sourceRows = normalizeArrayResponse(await this.requestApi<any>(`/api/v1/banners${assetQuery}`));
+    const assetQuery2 = assetId ? `?asset_id=${encodeURIComponent(assetId)}` : '';
+    const sourceRows = normalizeArrayResponse(await this.requestApi<any>(`/api/v1/internal/consent${assetQuery2}`));
 
     return sourceRows.map((cp: any) => {
       const cpId = String(cp?.collection_point || cp?.id || '');
@@ -604,7 +560,7 @@ class RightsCenterApi {
     payload: ConsentPayload
   ): Promise<void> {
     await this.requestApi(
-      `/api/v1/consent/${encodeURIComponent(collectionId)}/consent`,
+      `/api/v1/internal/consent/${encodeURIComponent(collectionId)}`,
       {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -612,15 +568,128 @@ class RightsCenterApi {
     );
   }
 
+  async saveConsentFromRightsCenter(
+    userId: string,
+    changedPurposes: Array<{ id: string; name: string; consented: 'accepted' | 'declined' }>,
+    assetId?: string,
+    sessionId?: string
+  ): Promise<void> {
+    const hasRevocation = changedPurposes.some((p) => p.consented === 'declined');
+    const action: 'approved' | 'revoked' = hasRevocation ? 'revoked' : 'approved';
+
+    await this.requestApi('/api/v1/internal/consent/rights-center', {
+      method: 'POST',
+      body: JSON.stringify({
+        userId,
+        purposes: changedPurposes,
+        action,
+        assetId,
+        source: 'right center react-native',
+        metadata: {
+          button_used: 'save',
+          interaction_type: 'rights_center',
+          logged_at: new Date().toISOString(),
+          session_id: sessionId,
+        },
+      }),
+    });
+  }
+
+  async fetchUserConsents(userId: string, assetId?: string): Promise<FlatPurpose[]> {
+    const normalizeStatus = (val: any): 'accepted' | 'declined' => {
+      if (val === true || val === 'accepted' || val === 'approved') return 'accepted';
+      if (typeof val === 'string') {
+        const v = val.toLowerCase();
+        if (v === 'accepted' || v === 'approved' || v === 'yes' || v === 'true') return 'accepted';
+      }
+      return 'declined';
+    };
+
+    // Step 1 — same as website: GET /api/v1/internal/consent?asset_id=... (all banner templates)
+    const assetQuery = assetId ? `?asset_id=${encodeURIComponent(assetId)}` : '';
+    const bannersRaw = await this.requestApi<any>(`/api/v1/internal/consent${assetQuery}`);
+    const allBanners: any[] = Array.isArray(bannersRaw)
+      ? bannersRaw
+      : Array.isArray(bannersRaw?.data)
+      ? bannersRaw.data
+      : [];
+
+    // Step 2 — same as website: GET /api/v1/internal/consent/user-consent-status?userId=...
+    let userOverview: any[] = [];
+    try {
+      const userStatusRaw = await this.requestApi<any>(
+        `/api/v1/internal/consent/user-consent-status?userId=${encodeURIComponent(userId)}`
+      );
+      userOverview = userStatusRaw?.collectionPoints || [];
+    } catch {
+      // optional — proceed with template defaults if unavailable
+    }
+
+    // Step 3 — seed unique purpose map from template banners (same as website)
+    const uniquePurposesMap = new Map<string, FlatPurpose>();
+    for (const banner of allBanners) {
+      const purposes: any[] = Array.isArray(banner?.purposes) ? banner.purposes : [];
+      for (const p of purposes) {
+        const pid = String(p?.id ?? '');
+        const status = String(p?.status ?? '').toLowerCase();
+        if (!pid || (status && status !== 'active')) continue;
+        if (uniquePurposesMap.has(pid)) continue;
+
+        const purposeType = String(p?.purpose_type ?? '').toLowerCase();
+        const isMandatory = !!(p?.isMandatory || p?.is_mandatory || purposeType.includes('mandatory'));
+        uniquePurposesMap.set(pid, {
+          id: pid,
+          name: String(p?.name ?? p?.title ?? ''),
+          title: String(p?.title ?? p?.name ?? ''),
+          description: p?.description ? String(p.description) : undefined,
+          expiry_period: p?.expiry_period ? String(p.expiry_period) : undefined,
+          is_mandatory: isMandatory,
+          consented: normalizeStatus(p?.consented),
+          isLegitimate: Boolean(p?.is_legitimate || p?.isLegitimate),
+          dataElements: Array.isArray(p?.data_elements) ? p.data_elements : Array.isArray(p?.dataElements) ? p.dataElements : [],
+          processingActivities: Array.isArray(p?.processing_activities) ? p.processing_activities : Array.isArray(p?.processingActivities) ? p.processingActivities : [],
+          type: isMandatory ? 'Mandatory' : 'Optional',
+          timestamp: 0,
+        });
+      }
+    }
+
+    // Step 4 — overlay user consent status (same merge logic as website)
+    for (const cp of userOverview) {
+      const pcList = cp?.latest_consent?.purpose_consents || cp?.latestConsent?.purposeConsents || [];
+      const logTimestamp = new Date(cp?.latest_consent?.timestamp || cp?.latestConsent?.timestamp || 0).getTime();
+      for (const pc of pcList) {
+        const pid = String(pc?.purpose_id ?? pc?.id ?? pc?.purposeId ?? '');
+        if (!pid) continue;
+        const existing = uniquePurposesMap.get(pid);
+        if (!existing) continue;
+        if (logTimestamp > existing.timestamp) {
+          uniquePurposesMap.set(pid, {
+            ...existing,
+            consented: normalizeStatus(pc?.status ?? pc?.consented),
+            timestamp: logTimestamp,
+            dataElements: (pc?.data_elements || pc?.dataElements || existing.dataElements),
+            processingActivities: (pc?.processing_activities || pc?.processingActivities || existing.processingActivities),
+            description: pc?.description || existing.description,
+            name: pc?.name || pc?.title || existing.name,
+            title: pc?.name || pc?.title || existing.title,
+          });
+        }
+      }
+    }
+
+    return Array.from(uniquePurposesMap.values());
+  }
+
   // DPO endpoint
   async getDPOInfo(): Promise<DPOInfo> {
-    return this.requestApi<DPOInfo>('/api/v1/dpo');
+    return this.requestApi<DPOInfo>('/api/v1/internal/dpo');
   }
 
   // Nominee endpoints
   async getNominees(userId: string): Promise<Nominee[]> {
     const payload = await this.requestApi<any>(
-      `/api/v1/nominee/user/${encodeURIComponent(userId)}`
+      `/api/v1/internal/nominee/user/${encodeURIComponent(userId)}`
     );
 
     return this.normalizeArrayResponse(payload)
@@ -631,7 +700,7 @@ class RightsCenterApi {
   async createNominee(nominee: Nominee): Promise<Nominee> {
     const clientUserId = nominee.client_user_id || nominee.user_id || this.userId;
 
-    const payload = await this.requestApi<any>('/api/v1/nominee', {
+    const payload = await this.requestApi<any>('/api/v1/internal/nominee', {
       method: 'POST',
       body: JSON.stringify({
         nominee_name: nominee.nominee_name,
@@ -664,7 +733,7 @@ class RightsCenterApi {
   }
 
   async updateNominee(id: string, nominee: Nominee): Promise<Nominee> {
-    const payload = await this.requestApi<any>(`/api/v1/nominee/${encodeURIComponent(id)}`, {
+    const payload = await this.requestApi<any>(`/api/v1/internal/nominee/${encodeURIComponent(id)}`, {
       method: 'PUT',
       body: JSON.stringify(nominee),
     });
@@ -679,7 +748,7 @@ class RightsCenterApi {
   }
 
   async deleteNominee(id: string): Promise<void> {
-    await this.requestApi(`/api/v1/nominee/${encodeURIComponent(id)}`, {
+    await this.requestApi(`/api/v1/internal/nominee/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
   }
@@ -687,7 +756,7 @@ class RightsCenterApi {
   // Grievance endpoints
   async getGrievanceTickets(userId: string): Promise<GrievanceTicket[]> {
     const payload = await this.requestApi<any>(
-      `/api/v1/grievance/user/${encodeURIComponent(userId)}`
+      `/api/v1/internal/grievance/user/${encodeURIComponent(userId)}`
     );
 
     return this.normalizeArrayResponse(payload)
@@ -698,7 +767,7 @@ class RightsCenterApi {
   async createGrievanceTicket(
     ticket: GrievanceTicket
   ): Promise<GrievanceTicket> {
-    const payload = await this.requestApi<any>('/api/v1/grievance', {
+    const payload = await this.requestApi<any>('/api/v1/internal/grievance', {
       method: 'POST',
       body: JSON.stringify(ticket),
     });

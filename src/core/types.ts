@@ -22,6 +22,17 @@ export interface Banner {
   organization_name?: string;
   cookie_data_elements?: DataElement[];
   show_purposes?: boolean;
+  show_processors?: boolean;
+  description?: string;
+  // Re-consent fields
+  reconsentMode?: boolean;
+  reconsentCampaignId?: string;
+  reconsentUiMode?: 'full_cp' | 'diff_only' | 'temp_profile';
+  versionDiff?: any;
+  reconsentSource?: string;
+  expiryReconsentRequestId?: string;
+  consentStatus?: string;
+  collectionPoint?: string; // collection point ID for logging
 }
 
 export interface Purpose {
@@ -29,13 +40,25 @@ export interface Purpose {
   name: string;
   description: string;
   is_mandatory: boolean;
-  consented: 'accepted' | 'declined' | 'pending';
+  consented: 'accepted' | 'declined' | 'pending' | 'shown';
   expiry_period: string;
   expiry_label?: string;
   data_elements?: DataElement[];
   processing_activities?: ProcessingActivity[];
   legal_entities?: LegalEntity[];
   tools?: Tool[];
+  // Extended fields
+  is_legitimate?: boolean;
+  is_dynamic?: boolean;
+  frequency?: 'recurring' | 'one_off';
+  purpose_type?: string;
+  version?: string;
+  // Computed after normalization
+  isLegitimate?: boolean;
+  isMandatory?: boolean;
+  legalBasis?: 'notice' | 'consent';
+  withdrawable?: boolean;
+  isDynamic?: boolean;
 }
 
 export interface DataElement {
@@ -99,6 +122,15 @@ export interface BannerSettings {
   disclaimer_text?: string;
   footer_text?: string;
   show_purposes?: boolean;
+  // H-Case settings
+  h_case_logging_strategy?: 'soft_first' | 'hard_immediate';
+  h_case_warning_message?: string;
+  h_case_proceed_button_text?: string;
+  h_case_back_button_text?: string;
+  h_case_proceed_button_color?: string;
+  h_case_back_button_color?: string;
+  // Default selection
+  defaultSelection?: 'all' | 'mandatory_only' | 'none';
 }
 
 export interface Organization {
@@ -143,5 +175,5 @@ export interface TruConsentConfig {
   logoUrl?: string;
   companyName?: string;
   onClose?: (action: ConsentAction) => void;
+  onSubmit?: (payload: any) => void;
 }
-

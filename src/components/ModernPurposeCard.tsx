@@ -32,7 +32,7 @@ const translateDynamic = (text: string, language: string): string => {
 export interface ModernPurposeCardProps {
   purpose: Purpose;
   banner: Banner;
-  onToggle: (purposeId: string, status: 'accepted' | 'declined') => void;
+  onToggle?: (purposeId: string, status: 'accepted' | 'declined') => void;
 }
 
 export default function ModernPurposeCard({
@@ -43,7 +43,7 @@ export default function ModernPurposeCard({
   const { t, i18n } = useTranslation();
   const [openSection, setOpenSection] = useState<string | null>(null);
   const isMandatory = purpose.is_mandatory;
-  const isAccepted = purpose.consented === 'accepted' || purpose.consented === true;
+  const isAccepted = purpose.consented === 'accepted' || (purpose.consented as any) === true;
   const expiryLabel = purpose.expiry_label || purpose.expiry_period || '1 Year';
 
   const handleToggleSection = (section: string) => {
@@ -80,7 +80,8 @@ export default function ModernPurposeCard({
             <View style={{ width: 8 }} />
             <Switch
               value={isAccepted}
-              onValueChange={(value) => onToggle(purpose.id, value ? 'accepted' : 'declined')}
+              onValueChange={(value) => onToggle && onToggle(purpose.id, value ? 'accepted' : 'declined')}
+              disabled={!onToggle}
               trackColor={{ false: '#d1d5db', true: '#3b82f6' }}
               thumbColor={isAccepted ? '#fff' : '#f4f3f4'}
             />
