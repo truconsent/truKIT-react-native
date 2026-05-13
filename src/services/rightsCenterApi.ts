@@ -427,10 +427,9 @@ class RightsCenterApi {
       return 'declined';
     };
 
-    // Same as website: GET /api/v1/internal/consent?asset_id=...
-    const assetQuery = assetId ? `?asset_id=${encodeURIComponent(assetId)}` : '';
+    // GET /api/v1/internal/consent/user/{userId} — consent scope, returns banners with user status
     const sourceRows = normalizeArrayResponse(
-      await this.requestApi<any>(`/api/v1/internal/consent${assetQuery}`)
+      await this.requestApi<any>(`/api/v1/internal/consent/user/${encodeURIComponent(userId)}`)
     );
 
     const merged: ConsentGroup[] = sourceRows.map((cp: any) => {
@@ -458,7 +457,7 @@ class RightsCenterApi {
     return merged;
   }
 
-  async getAllBanners(assetId?: string): Promise<ConsentGroup[]> {
+  async getAllBanners(userId?: string, assetId?: string): Promise<ConsentGroup[]> {
     const normalizeArrayResponse = (payload: any): any[] => {
       if (Array.isArray(payload)) return payload;
       if (Array.isArray(payload?.data)) return payload.data;
@@ -476,8 +475,10 @@ class RightsCenterApi {
       return 'declined';
     };
 
-    const assetQuery2 = assetId ? `?asset_id=${encodeURIComponent(assetId)}` : '';
-    const sourceRows = normalizeArrayResponse(await this.requestApi<any>(`/api/v1/internal/consent${assetQuery2}`));
+    // GET /api/v1/internal/consent/user/{userId} — consent scope, returns banners with user status
+    const sourceRows = normalizeArrayResponse(
+      await this.requestApi<any>(`/api/v1/internal/consent/user/${encodeURIComponent(userId ?? '')}`)
+    );
 
     return sourceRows.map((cp: any) => {
       const cpId = String(cp?.collection_point || cp?.id || '');
@@ -605,9 +606,11 @@ class RightsCenterApi {
       return 'declined';
     };
 
-    // Step 1 — same as website: GET /api/v1/internal/consent?asset_id=... (all banner templates)
-    const assetQuery = assetId ? `?asset_id=${encodeURIComponent(assetId)}` : '';
-    const bannersRaw = await this.requestApi<any>(`/api/v1/internal/consent${assetQuery}`);
+    // Step 1 — GET /api/v1/internal/consent/user/{userId}
+    // Uses consent scope (not admin), returns banners with user's consent status merged in.
+    const bannersRaw = await this.requestApi<any>(
+      `/api/v1/internal/consent/user/${encodeURIComponent(userId)}`
+    );
     const allBanners: any[] = Array.isArray(bannersRaw)
       ? bannersRaw
       : Array.isArray(bannersRaw?.data)
