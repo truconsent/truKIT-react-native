@@ -1,25 +1,11 @@
 // Jest setup file
-// Mock react-native modules
-const mockReactNative = {
-  Platform: {
-    OS: 'ios',
-    select: jest.fn((dict) => dict.ios),
-  },
-  StyleSheet: {
-    create: (styles) => styles,
-  },
-  View: 'View',
-  Text: 'Text',
-  TouchableOpacity: 'TouchableOpacity',
-  ScrollView: 'ScrollView',
-  Modal: 'Modal',
-  ActivityIndicator: 'ActivityIndicator',
-  Image: 'Image',
-  Switch: 'Switch',
-  Linking: {
-    openURL: jest.fn(),
-  },
-};
+//
+// The react-native mock itself lives in jest.react-native-mock.js — a
+// separate file, deliberately. jest.config.js's moduleNameMapper resolves
+// react-i18next/react-native-localize to THIS file, and jest.mock() below
+// registers by resolved path — aliasing react-native to this same file too
+// let one jest.mock() call silently override what every other aliased name
+// resolved to (see jest.react-native-mock.js's comment for the full story).
 
 // Mock i18next
 const mockI18next = {
@@ -37,9 +23,6 @@ const mockI18next = {
 const mockLocalize = {
   getLocales: () => [{ languageCode: 'en' }],
 };
-
-// Export react-native mock by default
-module.exports = mockReactNative;
 
 // Set up mocks for jest.mock calls
 if (typeof jest !== 'undefined') {

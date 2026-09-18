@@ -19,6 +19,14 @@ export interface HCaseWarningModalProps {
   onProceed: () => void;
   onBack: () => void;
   primaryColor?: string;
+  /** h_case_proceed_button_color from the notice's Global Settings; falls
+   * back to primaryColor, matching truKIT-NPM's HCaseWarningPopup.jsx. */
+  proceedColor?: string;
+  /** h_case_back_button_color from the notice's Global Settings. When unset,
+   * keeps the outlined style below (truKIT-NPM instead fills a light grey
+   * background by default; RN's existing outline is kept as the default
+   * look so unconfigured banners don't change appearance). */
+  backColor?: string;
 }
 
 export default function HCaseWarningModal({
@@ -29,8 +37,11 @@ export default function HCaseWarningModal({
   backText = 'Go Back',
   onProceed,
   onBack,
-  primaryColor = '#7030bc',
+  primaryColor = '#3b82f6',
+  proceedColor,
+  backColor,
 }: HCaseWarningModalProps) {
+  const resolvedProceedColor = proceedColor || primaryColor;
   const warningMessage =
     message ||
     'Some of the purposes you are declining are required for the service to function properly. Are you sure you want to proceed?';
@@ -60,13 +71,25 @@ export default function HCaseWarningModal({
             {strategy === 'soft_first' ? (
               <>
                 <TouchableOpacity
-                  style={[styles.backButton, { borderColor: primaryColor }]}
+                  style={[
+                    styles.backButton,
+                    backColor
+                      ? { backgroundColor: backColor, borderColor: backColor }
+                      : { borderColor: primaryColor },
+                  ]}
                   onPress={onBack}
                 >
-                  <Text style={[styles.backButtonText, { color: primaryColor }]}>{backText}</Text>
+                  <Text
+                    style={[
+                      styles.backButtonText,
+                      { color: backColor ? '#111827' : primaryColor },
+                    ]}
+                  >
+                    {backText}
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.proceedButton, { backgroundColor: primaryColor }]}
+                  style={[styles.proceedButton, { backgroundColor: resolvedProceedColor }]}
                   onPress={onProceed}
                 >
                   <Text style={styles.proceedButtonText}>{proceedText}</Text>
@@ -75,7 +98,7 @@ export default function HCaseWarningModal({
             ) : (
               // hard_immediate: only an OK button (no proceed anyway)
               <TouchableOpacity
-                style={[styles.okButton, { backgroundColor: primaryColor }]}
+                style={[styles.okButton, { backgroundColor: resolvedProceedColor }]}
                 onPress={onBack}
               >
                 <Text style={styles.proceedButtonText}>OK</Text>

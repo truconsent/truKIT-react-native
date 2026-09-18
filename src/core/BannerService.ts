@@ -2,6 +2,47 @@
  * BannerService - HTTP client for banner API calls in React Native
  */
 import { Banner } from './types';
+import { withCasingAliases, withCasingAliasesList } from '../utils/apiCasing';
+
+/** Normalizes a raw banner API response so every field is readable under
+ * either camelCase or snake_case, regardless of which convention the
+ * backend serving this deployment actually uses. See apiCasing.ts for why
+ * this is necessary — trukit-dev.truconsent.io (this package's own default
+ * API) returns pure camelCase at every level (banner, bannerSettings,
+ * purposes, and purposes' nested dataElements/tools/legalEntities/
+ * processingActivities). */
+function normalizeBanner(data: any): Banner {
+  const banner = withCasingAliases(data);
+  const rawSettings = banner.banner_settings || banner.bannerSettings;
+  if (rawSettings) {
+    const settings = withCasingAliases(rawSettings);
+    banner.banner_settings = settings;
+    banner.bannerSettings = settings;
+  }
+  const rawTranslations = banner.translations_snapshot || banner.translationsSnapshot;
+  if (rawTranslations) {
+    banner.translations_snapshot = rawTranslations;
+    banner.translationsSnapshot = rawTranslations;
+  }
+  if (Array.isArray(banner.purposes)) {
+    banner.purposes = banner.purposes.map((p: any) => {
+      const purpose = withCasingAliases(p);
+      for (const key of ['data_elements', 'tools', 'legal_entities', 'processing_activities']) {
+        if (Array.isArray(purpose[key])) {
+          purpose[key] = withCasingAliasesList(purpose[key]);
+        }
+      }
+      return purpose;
+    });
+  }
+  if (Array.isArray(banner.reconsentPurposes) || Array.isArray(banner.reconsent_purposes)) {
+    const list = banner.reconsentPurposes || banner.reconsent_purposes;
+    const normalized = withCasingAliasesList(list);
+    banner.reconsentPurposes = normalized;
+    banner.reconsent_purposes = normalized;
+  }
+  return banner as Banner;
+}
 
 export const DEFAULT_API_URL = 'https://trukit-dev.truconsent.io';
 
@@ -179,7 +220,7 @@ export async function fetchBanner(config: FetchBannerConfig): Promise<Banner> {
 
   const data = await response.json();
   console.log('Banner data received:', JSON.stringify(data, null, 2));
-  return data;
+  return normalizeBanner(data);
 }
 
 /**

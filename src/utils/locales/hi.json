@@ -13,6 +13,14 @@
   "legal_entities": "कानूनी संस्थाएं",
   "tools": "उपकरण",
   "processing_activities": "प्रसंस्करण गतिविधियां",
-  "data_processors": "डेटा प्रोसेसर"
+  "data_processors": "डेटा प्रोसेसर",
+  "informational": "सूचनात्मक",
+  "consent": "सहमति",
+  "necessary_group": "आवश्यक",
+  "optional_group": "वैकल्पिक",
+  "profile_based_group": "प्रोफ़ाइल आधारित",
+  "no_consent_purposes": "कोई सहमति उद्देश्य उपलब्ध नहीं है",
+  "no_purposes_available": "कोई उद्देश्य उपलब्ध नहीं है",
+  "select_language": "भाषा चुनें"
 }
 

@@ -24,6 +24,11 @@ export interface Banner {
   show_purposes?: boolean;
   show_processors?: boolean;
   description?: string;
+  // Server-driven translations for dynamic content (purpose names/
+  // descriptions, banner title/disclaimer/footer) — see
+  // utils/translationSnapshot.ts. Both casings supported like the NPM SDK.
+  translationsSnapshot?: import('../utils/translationSnapshot').TranslationSnapshot;
+  translations_snapshot?: import('../utils/translationSnapshot').TranslationSnapshot;
   // Re-consent fields
   reconsentMode?: boolean;
   reconsentCampaignId?: string;
@@ -115,7 +120,26 @@ export interface BannerSettings {
   font_size?: string;
   primary_color?: string;
   secondary_color?: string;
+  // "Common Appearance" fields from the admin dashboard — drive the banner's
+  // background/text/button colors. Mirrors truKIT-NPM's
+  // normalizeBannerSettings() (TruConsentModal.jsx), which reads these same
+  // fields (camelCase or snake_case) for its `styleVars`.
+  background_color?: string;
+  primary_text_color?: string;
+  secondary_text_color?: string;
+  button_color?: string;
+  button_text_color?: string;
   action_button_text?: string;
+  // Per-notice "Global Settings" button overrides — separate from Common
+  // Appearance. Mirrors truKIT-NPM's normalizeBannerSettings()/
+  // ModernBannerActions.jsx, which reads these same snake_case fields to
+  // style the Reject All / Only Necessary buttons (Accept All continues to
+  // use button_color/button_text_color above).
+  reject_all_color?: string;
+  reject_all_text?: string;
+  only_necessary_color?: string;
+  only_necessary_text?: string;
+  accept_all_text?: string;
   warning_text?: string;
   logo_url?: string;
   banner_title?: string;
@@ -131,6 +155,12 @@ export interface BannerSettings {
   h_case_back_button_color?: string;
   // Default selection
   defaultSelection?: 'all' | 'mandatory_only' | 'none';
+  // Selects which banner template/layout to render. One of: 'tabbed_banner',
+  // 'center_modal', 'preferences_modal', 'floating_card', 'notice_only',
+  // 'inline_single_row', 'general_compact_list', 'general_split_pane'.
+  // Unrecognized/absent values fall back to 'tabbed_banner' (see
+  // templateRegistry.ts).
+  general_notice_template?: string;
 }
 
 export interface Organization {

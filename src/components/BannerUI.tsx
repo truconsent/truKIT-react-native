@@ -3,8 +3,10 @@
  */
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { Banner, Purpose } from '../core/types';
 import { UIState, BannerCase, NormalizedPurpose } from '../core/ConsentManager';
+import { BannerTheme, deriveBannerThemeColors } from '../utils/ColorUtils';
 import ModernBannerHeader from './ModernBannerHeader';
 import ModernPurposeCard from './ModernPurposeCard';
 import ModernBannerFooter from './ModernBannerFooter';
@@ -22,6 +24,16 @@ export interface BannerUIProps {
   primaryColor?: string;
   secondaryColor?: string;
   uiState?: UIState;
+  /** "Common Appearance" theme (background/text/button colors, font) from
+   * the admin dashboard. Derived from `banner.banner_settings` if omitted. */
+  theme?: BannerTheme;
+  /** Translates dynamic (server-supplied) text via the banner's translation
+   * snapshot — see utils/translationSnapshot.ts. Identity function if omitted. */
+  translate?: (text: string) => string;
+  selectedLanguage?: string;
+  availableLanguages?: string[];
+  languageLabels?: Record<string, string>;
+  onLanguageChange?: (lang: string) => void;
 }
 
 export default function BannerUI({
@@ -36,16 +48,41 @@ export default function BannerUI({
   primaryColor,
   secondaryColor,
   uiState,
+  theme: themeProp,
+  translate = (text: string) => text || '',
+  selectedLanguage = 'en',
+  availableLanguages = [],
+  languageLabels = {},
+  onLanguageChange,
 }: BannerUIProps) {
   const settings = banner?.banner_settings || {};
-  const finalPrimaryColor = settings.primary_color || primaryColor || '#3b82f6';
+  const theme = themeProp ?? deriveBannerThemeColors(settings);
+  // button_color must win over primary_color ("Background Color" — see
+  // ColorUtils.ts's deriveBannerThemeColors) for the Accept All button,
+  // matching truKIT-NPM's ModernBannerActions.jsx `buttonColor || primaryColor`
+  // priority. theme.button already resolves that chain.
+  const finalPrimaryColor = theme.button || primaryColor;
   const finalSecondaryColor = settings.secondary_color || secondaryColor || '#555';
   const footerText =
     settings.footer_text ||
     'Review our [Privacy Policy] and [Transparency Centre], [DPO Details]. Use the [Rights Centre] anytime to withdraw consent, delete data, name a nominee, or raise a grievance.';
   const bannerTitle = settings.banner_title;
   const disclaimerText = settings.disclaimer_text;
-  const actionButtonText = settings.action_button_text || 'I Consent';
+  const actionButtonText = settings.action_button_text || settings.accept_all_text || 'I Consent';
+  const fontFamily = theme.fontFamily;
+
+  const { t } = useTranslation();
+  // For static UI microcopy (tab labels, group headers, empty states):
+  // prefer the server-driven snapshot (covers every language the admin
+  // actually configured, matching truKIT-NPM's translate() usage for this
+  // exact same copy — see TabbedBannerUI.jsx's buildTabs), falling back to
+  // the static i18next bundle (only covers en/hi/ta) so those two languages
+  // keep working even with no snapshot.
+  const tr = (text: string, i18nKey?: string): string => {
+    const snapshotResult = translate(text);
+    if (snapshotResult !== text) return snapshotResult;
+    return i18nKey ? t(i18nKey) : text;
+  };
 
   // Tab state for tabbed UI
   const [activeTab, setActiveTab] = useState<'informational' | 'consent'>('consent');
@@ -67,15 +104,27 @@ export default function BannerUI({
     readOnly = false
   ) => {
     if (!purposeList || purposeList.length === 0) return null;
+    const groupI18nKey =
+      label === 'Necessary'
+        ? 'necessary_group'
+        : label === 'Optional'
+        ? 'optional_group'
+        : label === 'Profile Based'
+        ? 'profile_based_group'
+        : undefined;
     return (
       <View style={styles.purposeGroup}>
-        <Text style={styles.purposeGroupLabel}>{label}</Text>
+        <Text style={[styles.purposeGroupLabel, { color: theme.textMuted, fontFamily }]}>
+          {tr(label, groupI18nKey)}
+        </Text>
         {purposeList.map((p, index) => (
           <View key={p.id} style={index > 0 ? { marginTop: 12 } : undefined}>
             <ModernPurposeCard
               purpose={p as Purpose}
               banner={banner}
               onToggle={readOnly ? undefined : onChangePurpose}
+              theme={theme}
+             translate={translate}
             />
           </View>
         ))}
@@ -83,27 +132,26 @@ export default function BannerUI({
     );
   };
 
-  console.log('BannerUI rendering with:', {
-    purposesCount: banner?.purposes?.length || 0,
-    companyName,
-    bannerCase,
-    hasSettings: !!banner?.banner_settings,
-  });
-
   // NOTICE_ONLY case
   if (bannerCase === BannerCase.NOTICE_ONLY) {
     const allPurposes = noticePurposes.length > 0 ? noticePurposes : (banner.purposes as NormalizedPurpose[]);
     return (
-      <View style={styles.container}>
+      <View style={[styles.container, { backgroundColor: theme.background }]}>
         <ModernBannerHeader
           logoUrl={settings.logo_url || logoUrl}
           orgName={companyName}
           bannerTitle={bannerTitle}
           disclaimerText={disclaimerText}
+          theme={theme}
+          translate={translate}
+          selectedLanguage={selectedLanguage}
+          availableLanguages={availableLanguages}
+          languageLabels={languageLabels}
+          onLanguageChange={onLanguageChange}
         />
-        <View style={styles.tabBar}>
+        <View style={[styles.tabBar, { borderBottomColor: theme.border }]}>
           <View style={[styles.tabButton, styles.tabButtonActive, { borderBottomColor: finalPrimaryColor }]}>
-            <Text style={[styles.tabText, { color: finalPrimaryColor }]}>Informational</Text>
+            <Text style={[styles.tabText, { color: finalPrimaryColor, fontFamily }]}>{tr('Informational', 'informational')}</Text>
           </View>
         </View>
         <View style={styles.purposesContainer}>
@@ -113,17 +161,19 @@ export default function BannerUI({
                 purpose={p as Purpose}
                 banner={banner}
                 onToggle={undefined}
+                theme={theme}
+               translate={translate}
               />
             </View>
           ))}
         </View>
         <View style={styles.footerWrapper}>
-          <ModernBannerFooter footerText={footerText} orgName={companyName} />
+          <ModernBannerFooter footerText={footerText} orgName={companyName} theme={theme} translate={translate} />
           <TouchableOpacity
             style={[styles.iUnderstandButton, { backgroundColor: finalPrimaryColor }]}
             onPress={onAcknowledgeNotice}
           >
-            <Text style={styles.iUnderstandButtonText}>
+            <Text style={[styles.iUnderstandButtonText, { color: theme.buttonText, fontFamily }]}>
               {actionButtonText === 'I Consent' ? 'I Understand' : actionButtonText}
             </Text>
           </TouchableOpacity>
@@ -135,16 +185,22 @@ export default function BannerUI({
   // TABBED case
   if (bannerCase === BannerCase.TABBED) {
     return (
-      <View style={styles.container}>
+      <View style={[styles.container, { backgroundColor: theme.background }]}>
         <ModernBannerHeader
           logoUrl={settings.logo_url || logoUrl}
           orgName={companyName}
           bannerTitle={bannerTitle}
           disclaimerText={disclaimerText}
+          theme={theme}
+          translate={translate}
+          selectedLanguage={selectedLanguage}
+          availableLanguages={availableLanguages}
+          languageLabels={languageLabels}
+          onLanguageChange={onLanguageChange}
         />
 
         {/* Tab bar */}
-        <View style={styles.tabBar}>
+        <View style={[styles.tabBar, { borderBottomColor: theme.border }]}>
           <TouchableOpacity
             style={[
               styles.tabButton,
@@ -155,10 +211,11 @@ export default function BannerUI({
             <Text
               style={[
                 styles.tabText,
-                activeTab === 'informational' ? { color: finalPrimaryColor } : styles.tabTextInactive,
+                { fontFamily },
+                activeTab === 'informational' ? { color: finalPrimaryColor } : { color: theme.textMuted },
               ]}
             >
-              Informational
+              {tr('Informational', 'informational')}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -171,10 +228,11 @@ export default function BannerUI({
             <Text
               style={[
                 styles.tabText,
-                activeTab === 'consent' ? { color: finalPrimaryColor } : styles.tabTextInactive,
+                { fontFamily },
+                activeTab === 'consent' ? { color: finalPrimaryColor } : { color: theme.textMuted },
               ]}
             >
-              Consent
+              {tr('Consent', 'consent')}
             </Text>
           </TouchableOpacity>
         </View>
@@ -188,6 +246,8 @@ export default function BannerUI({
                   purpose={p as Purpose}
                   banner={banner}
                   onToggle={undefined}
+                  theme={theme}
+                 translate={translate}
                 />
               </View>
             ))}
@@ -199,14 +259,16 @@ export default function BannerUI({
             {renderPurposeGroup('Profile Based', profileBasedPurposes)}
             {consentPurposes.length === 0 && (
               <View style={styles.emptyState}>
-                <Text style={styles.emptyStateText}>No consent purposes available</Text>
+                <Text style={[styles.emptyStateText, { color: theme.textMuted, fontFamily }]}>
+                  {tr('No consent purposes available', 'no_consent_purposes')}
+                </Text>
               </View>
             )}
           </View>
         )}
 
         <View style={styles.footerWrapper}>
-          <ModernBannerFooter footerText={footerText} orgName={companyName} />
+          <ModernBannerFooter footerText={footerText} orgName={companyName} theme={theme} translate={translate} />
           <ModernBannerActions
             onRejectAll={onRejectAll}
             onConsentAll={onConsentAll}
@@ -214,6 +276,12 @@ export default function BannerUI({
             purposes={banner?.purposes || []}
             actionButtonText={actionButtonText}
             primaryColor={finalPrimaryColor}
+            theme={theme}
+            rejectAllColor={settings.reject_all_color}
+            rejectAllText={settings.reject_all_text}
+            onlyNecessaryColor={settings.only_necessary_color}
+            onlyNecessaryText={settings.only_necessary_text}
+            translate={translate}
           />
         </View>
       </View>
@@ -222,12 +290,18 @@ export default function BannerUI({
 
   // NORMAL case (default)
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       <ModernBannerHeader
         logoUrl={settings.logo_url || logoUrl}
         orgName={companyName}
         bannerTitle={bannerTitle}
         disclaimerText={disclaimerText}
+        theme={theme}
+        translate={translate}
+        selectedLanguage={selectedLanguage}
+        availableLanguages={availableLanguages}
+        languageLabels={languageLabels}
+        onLanguageChange={onLanguageChange}
       />
 
       <View style={styles.purposesContainer}>
@@ -245,19 +319,23 @@ export default function BannerUI({
                     purpose={p}
                     banner={banner}
                     onToggle={onChangePurpose}
+                    theme={theme}
+                   translate={translate}
                   />
                 </View>
               ))}
           </>
         ) : (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyStateText}>No purposes available</Text>
+            <Text style={[styles.emptyStateText, { color: theme.textMuted, fontFamily }]}>
+              {tr('No purposes available', 'no_purposes_available')}
+            </Text>
           </View>
         )}
       </View>
 
       <View style={styles.footerWrapper}>
-        <ModernBannerFooter footerText={footerText} orgName={companyName} />
+        <ModernBannerFooter footerText={footerText} orgName={companyName} theme={theme} translate={translate} />
         <ModernBannerActions
           onRejectAll={onRejectAll}
           onConsentAll={onConsentAll}
@@ -265,6 +343,12 @@ export default function BannerUI({
           purposes={banner?.purposes || []}
           actionButtonText={actionButtonText}
           primaryColor={finalPrimaryColor}
+          theme={theme}
+          rejectAllColor={settings.reject_all_color}
+          rejectAllText={settings.reject_all_text}
+          onlyNecessaryColor={settings.only_necessary_color}
+          onlyNecessaryText={settings.only_necessary_text}
+          translate={translate}
         />
       </View>
     </View>

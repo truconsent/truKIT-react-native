@@ -1,6 +1,6 @@
 {
   "name": "@truconsent/consent-notice-react-native",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "React Native SDK for TruConsent consent banner",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -13,8 +13,8 @@
     "tsconfig.json"
   ],
   "scripts": {
-    "build": "npx --yes --package typescript@5.9.2 tsc --lib es2020,dom,dom.iterable --skipLibCheck src/services/rightsCenterApi.ts --noEmit",
-    "typecheck": "npx --yes --package typescript@5.9.2 tsc --lib es2020,dom,dom.iterable --skipLibCheck src/services/rightsCenterApi.ts --noEmit",
+    "build": "npx --yes --package typescript@5.9.2 tsc --noEmit",
+    "typecheck": "npx --yes --package typescript@5.9.2 tsc --noEmit",
     "typecheck:all": "npx --yes --package typescript@5.9.2 tsc --noEmit",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -44,8 +44,11 @@
     "@types/react-native": "^0.72.0",
     "babel-jest": "^29.7.0",
     "babel-preset-expo": "^54.0.10",
+    "i18next": "^25.6.0",
     "jest": "^29.7.0",
     "metro-react-native-babel-preset": "^0.76.0",
+    "react-i18next": "^16.2.3",
+    "react-native-webview": "^13.0.0",
     "react-test-renderer": "^18.2.0",
     "ts-jest": "^29.4.6",
     "typescript": "^5.0.0"

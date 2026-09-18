@@ -5,8 +5,13 @@ import React, { useState } from 'react';
 import { View, Text, Switch, TouchableOpacity, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Purpose, Banner } from '../core/types';
+import { BannerTheme } from '../utils/ColorUtils';
 import CollapsibleDataSection from './CollapsibleDataSection';
 
+// Fallback for a handful of known purpose/data-element names when no
+// server-driven translation snapshot is available at all. The snapshot
+// (via the `translate` prop) is the real, general mechanism — this only
+// covers what it was hardcoded for historically.
 const dynamicTranslations: Record<string, Record<string, string>> = {
   ta: {
     'User Authentication & Management': 'பயனர் அங்கீகாரம் மற்றும் மேலாண்மை',
@@ -33,18 +38,42 @@ export interface ModernPurposeCardProps {
   purpose: Purpose;
   banner: Banner;
   onToggle?: (purposeId: string, status: 'accepted' | 'declined') => void;
+  theme?: BannerTheme;
+  /** Translates dynamic (server-supplied) text via the banner's translation
+   * snapshot. Falls back to the small hardcoded dict above, then to the
+   * original text, if the snapshot has no match. */
+  translate?: (text: string) => string;
 }
 
 export default function ModernPurposeCard({
   purpose,
   banner,
   onToggle,
+  theme,
+  translate,
 }: ModernPurposeCardProps) {
   const { t, i18n } = useTranslation();
   const [openSection, setOpenSection] = useState<string | null>(null);
   const isMandatory = purpose.is_mandatory;
   const isAccepted = purpose.consented === 'accepted' || (purpose.consented as any) === true;
   const expiryLabel = purpose.expiry_label || purpose.expiry_period || '1 Year';
+
+  const localize = (text: string): string => {
+    const snapshotResult = translate ? translate(text) : text;
+    if (snapshotResult !== text) return snapshotResult;
+    return translateDynamic(text, i18n.language);
+  };
+
+  // For static UI microcopy (badges, section titles): prefer the
+  // server-driven snapshot (covers every language the admin actually
+  // configured, matching truKIT-NPM's translateDynamic usage for this exact
+  // same copy), falling back to the static i18next bundle (only covers
+  // en/hi/ta) so those two languages keep working even with no snapshot.
+  const tr = (text: string, i18nKey?: string): string => {
+    const snapshotResult = translate ? translate(text) : text;
+    if (snapshotResult !== text) return snapshotResult;
+    return i18nKey ? t(i18nKey) : text;
+  };
 
   const handleToggleSection = (section: string) => {
     setOpenSection(openSection === section ? null : section);
@@ -55,34 +84,44 @@ export default function ModernPurposeCard({
   const legalEntities = purpose.legal_entities || [];
   const tools = purpose.tools || [];
 
+  const cardBg = theme?.background ?? '#fff';
+  const textColor = theme?.text ?? '#111827';
+  const mutedColor = theme?.textMuted ?? '#6b7280';
+  const borderColor = theme?.border ?? '#e5e7eb';
+  const fontFamily = theme?.fontFamily;
+
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
       <View style={styles.header}>
         <View style={styles.headerContent}>
           <View style={styles.titleRow}>
-            <Text style={styles.title}>{translateDynamic(purpose.name, i18n.language)}</Text>
+            <Text style={[styles.title, { color: textColor, fontFamily }]}>{localize(purpose.name)}</Text>
             {isMandatory && (
               <View style={styles.mandatoryBadge}>
-                <Text style={styles.mandatoryText}>{t('mandatory')}</Text>
+                <Text style={[styles.mandatoryText, { fontFamily }]}>
+                  {tr('Necessary', 'necessary_group')}
+                </Text>
               </View>
             )}
           </View>
-          <Text style={styles.description}>{translateDynamic(purpose.description, i18n.language)}</Text>
+          <Text style={[styles.description, { color: mutedColor, fontFamily }]}>
+            {localize(purpose.description)}
+          </Text>
         </View>
         <View style={styles.actions}>
           <View style={styles.expiryBadge}>
-            <Text style={styles.expiryText}>{t('expiry_type', { expiry: expiryLabel })}</Text>
+            <Text style={[styles.expiryText, { fontFamily }]}>{t('expiry_type', { expiry: expiryLabel })}</Text>
           </View>
           <View style={styles.switchContainer}>
-            <Text style={[styles.switchLabel, isAccepted && styles.switchLabelActive]}>
-              {t('accept')}
+            <Text style={[styles.switchLabel, { fontFamily }, isAccepted && styles.switchLabelActive]}>
+              {tr('Accept', 'accept')}
             </Text>
             <View style={{ width: 8 }} />
             <Switch
               value={isAccepted}
               onValueChange={(value) => onToggle && onToggle(purpose.id, value ? 'accepted' : 'declined')}
               disabled={!onToggle}
-              trackColor={{ false: '#d1d5db', true: '#3b82f6' }}
+              trackColor={{ false: '#d1d5db', true: theme?.button ?? '#3b82f6' }}
               thumbColor={isAccepted ? '#fff' : '#f4f3f4'}
             />
           </View>
@@ -91,34 +130,40 @@ export default function ModernPurposeCard({
 
       {dataElements.length > 0 && (
         <CollapsibleDataSection
-          title={t('data_elements')}
+          title={tr('Data Elements', 'data_elements')}
           items={dataElements}
           isOpen={openSection === 'data_elements'}
           onToggle={() => handleToggleSection('data_elements')}
+          translate={translate}
+          theme={theme}
         />
       )}
 
       {banner?.show_processors !== false && (legalEntities.length > 0 || tools.length > 0) && (
-        <View style={styles.section}>
+        <View style={[styles.section, { borderTopColor: borderColor }]}>
           <TouchableOpacity
             style={styles.sectionHeader}
             onPress={() => handleToggleSection('data_processors')}
           >
-            <Text style={styles.sectionTitle}>{t('data_processors') || 'Data Processors'}</Text>
-            <Text style={styles.chevron}>{openSection === 'data_processors' ? '▼' : '▶'}</Text>
+            <Text style={[styles.sectionTitle, { color: mutedColor, fontFamily }]}>
+              {tr('Data Processors', 'data_processors')}
+            </Text>
+            <Text style={[styles.chevron, { color: mutedColor }]}>
+              {openSection === 'data_processors' ? '▼' : '▶'}
+            </Text>
           </TouchableOpacity>
           {openSection === 'data_processors' && (
             <View style={styles.sectionContent}>
               {legalEntities.length > 0 && (
                 <View style={styles.subsection}>
-                  <Text style={styles.subsectionTitle}>
-                    {t('legal_entities')} ({legalEntities.length})
+                  <Text style={[styles.subsectionTitle, { color: mutedColor, fontFamily }]}>
+                    {tr('Legal Entities', 'legal_entities')} ({legalEntities.length})
                   </Text>
                   <View style={styles.pillsContainer}>
                     {legalEntities.map((item) => (
-                      <View key={item.id} style={styles.pill}>
-                        <Text style={styles.pillText}>
-                          {translateDynamic(item.name, i18n.language)}
+                      <View key={item.id} style={[styles.pill, { backgroundColor: cardBg, borderColor }]}>
+                        <Text style={[styles.pillText, { color: textColor, fontFamily }]}>
+                          {localize(item.name)}
                         </Text>
                       </View>
                     ))}
@@ -127,14 +172,21 @@ export default function ModernPurposeCard({
               )}
               {tools.length > 0 && (
                 <View style={styles.subsection}>
-                  <Text style={styles.subsectionTitle}>
-                    {t('tools')} ({tools.length})
+                  <Text style={[styles.subsectionTitle, { color: mutedColor, fontFamily }]}>
+                    {tr('Tools', 'tools')} ({tools.length})
                   </Text>
                   <View style={styles.pillsContainer}>
                     {tools.map((item, index) => (
-                      <View key={item.id} style={[styles.pill, index > 0 && { marginLeft: 8, marginTop: 8 }]}>
-                        <Text style={styles.pillText}>
-                          {translateDynamic(item.name, i18n.language)}
+                      <View
+                        key={item.id}
+                        style={[
+                          styles.pill,
+                          { backgroundColor: cardBg, borderColor },
+                          index > 0 && { marginLeft: 8, marginTop: 8 },
+                        ]}
+                      >
+                        <Text style={[styles.pillText, { color: textColor, fontFamily }]}>
+                          {localize(item.name)}
                         </Text>
                       </View>
                     ))}
@@ -148,10 +200,12 @@ export default function ModernPurposeCard({
 
       {processingActivities.length > 0 && (
         <CollapsibleDataSection
-          title={t('processing_activities') || 'Processing Activities'}
+          title={tr('Processing Activities', 'processing_activities')}
           items={processingActivities}
           isOpen={openSection === 'processing_activities'}
           onToggle={() => handleToggleSection('processing_activities')}
+          translate={translate}
+          theme={theme}
         />
       )}
     </View>
@@ -279,4 +333,3 @@ const styles = StyleSheet.create({
     color: '#374151',
   },
 });
-

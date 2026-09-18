@@ -5,6 +5,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { DataElement, ProcessingActivity } from '../core/types';
+import { BannerTheme } from '../utils/ColorUtils';
 
 const dynamicTranslations: Record<string, Record<string, string>> = {
   ta: {
@@ -41,6 +42,13 @@ export interface CollapsibleDataSectionProps {
   items: (DataElement | ProcessingActivity)[];
   isOpen: boolean;
   onToggle: () => void;
+  /** Translates dynamic (server-supplied) text via the banner's translation
+   * snapshot. Falls back to the small hardcoded dict above, then to the
+   * original text, if the snapshot has no match. */
+  translate?: (text: string) => string;
+  /** "Common Appearance" theme (secondary/text colors, font) from the admin
+   * dashboard. */
+  theme?: BannerTheme;
 }
 
 export default function CollapsibleDataSection({
@@ -48,22 +56,44 @@ export default function CollapsibleDataSection({
   items,
   isOpen,
   onToggle,
+  translate,
+  theme,
 }: CollapsibleDataSectionProps) {
   const { i18n } = useTranslation();
 
+  const localize = (text: string): string => {
+    const snapshotResult = translate ? translate(text) : text;
+    if (snapshotResult !== text) return snapshotResult;
+    return translateDynamic(text, i18n.language);
+  };
+
+  const mutedColor = theme?.textMuted ?? '#374151';
+  const textColor = theme?.text ?? '#374151';
+  const borderColor = theme?.border ?? '#e5e7eb';
+  const fontFamily = theme?.fontFamily;
+
   return (
-    <View style={styles.section}>
+    <View style={[styles.section, { borderTopColor: borderColor }]}>
       <TouchableOpacity style={styles.header} onPress={onToggle}>
-        <Text style={styles.title}>
+        <Text style={[styles.title, { color: mutedColor, fontFamily }]}>
           {title} ({items.length})
         </Text>
-        <Text style={styles.chevron}>{isOpen ? '▼' : '▶'}</Text>
+        <Text style={[styles.chevron, { color: mutedColor }]}>{isOpen ? '▼' : '▶'}</Text>
       </TouchableOpacity>
       {isOpen && (
         <View style={styles.content}>
           {items.map((item, index) => (
-            <View key={item.id} style={[styles.pill, index > 0 && { marginLeft: 8, marginTop: 8 }]}>
-              <Text style={styles.pillText}>{translateDynamic(item.name, i18n.language)}</Text>
+            <View
+              key={item.id}
+              style={[
+                styles.pill,
+                { backgroundColor: theme?.background ?? '#fff', borderColor },
+                index > 0 && { marginLeft: 8, marginTop: 8 },
+              ]}
+            >
+              <Text style={[styles.pillText, { color: textColor, fontFamily }]}>
+                {localize(item.name)}
+              </Text>
             </View>
           ))}
         </View>

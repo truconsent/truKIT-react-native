@@ -22,13 +22,18 @@ import RightsCenterApi, {
   DPOInfo,
   Nominee,
   GrievanceTicket,
+  GrievanceMessage,
   ConsentPayload,
 } from '../services/rightsCenterApi';
 import { deriveThemeColors } from '../utils/ColorUtils';
 import { DEFAULT_API_URL } from '../core/BannerService';
 
 export interface NativeRightCenterProps {
-  userId: string;
+  /** The signed-in user's id (SSO mode). Omit this when the Rights Center's
+   * global settings have `access_mode: 'non_sso'` — in that case the widget
+   * itself authenticates the user via a phone + OTP flow before showing any
+   * tab content, and the resulting data principal id is used in its place. */
+  userId?: string;
   apiKey?: string;
   organizationId?: string;
   apiUrl?: string;
@@ -72,6 +77,8 @@ export default function NativeRightCenter({
   organizationId = '',
   apiUrl,
   assetId,
+  token,
+  authToken,
 }: NativeRightCenterProps) {
   const [rightsCenterSettings, setRightsCenterSettings] = useState(
     DEFAULT_RIGHTS_CENTER_SETTINGS as any
@@ -82,8 +89,104 @@ export default function NativeRightCenter({
 
   // Single API instance — same key for all calls, same as website
   const [api] = useState(
-    () => new RightsCenterApi(apiUrl ?? DEFAULT_API_URL, apiKey, organizationId, userId)
+    () =>
+      new RightsCenterApi(
+        apiUrl ?? DEFAULT_API_URL,
+        apiKey,
+        organizationId,
+        userId,
+        token ?? authToken
+      )
   );
+
+  // ─── Non-SSO OTP authentication state ────────────────────────────────────────
+  const [internalAuth, setInternalAuth] = useState<{
+    accessToken: string;
+    dataPrincipalId: string;
+  } | null>(null);
+  const [phone, setPhone] = useState('');
+  const [countryCode, setCountryCode] = useState('+91');
+  const [otp, setOtp] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [otpResendsUsed, setOtpResendsUsed] = useState(0);
+  const [otpCooldown, setOtpCooldown] = useState(0);
+  const [nonSsoDismissed, setNonSsoDismissed] = useState(false);
+
+  useEffect(() => {
+    if (otpCooldown <= 0) return;
+    const t = setTimeout(() => setOtpCooldown((s) => Math.max(0, s - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [otpCooldown]);
+
+  // The user id to act as: the SSO-supplied prop, or (once verified) the
+  // non-SSO OTP flow's data principal id.
+  const effectiveUserId = userId || internalAuth?.dataPrincipalId || '';
+
+  // True while non-SSO access is configured, no SSO userId was supplied, and
+  // the user hasn't completed OTP verification yet. Used to gate data
+  // fetching (regardless of whether the OTP UI is visible or dismissed).
+  const needsNonSsoAuth =
+    !userId && rightsCenterSettings.access_mode === 'non_sso' && !internalAuth;
+
+  // True when the phone/OTP screen should actually be rendered: same as
+  // needsNonSsoAuth, but also respects the user dismissing it (the "X" close
+  // button) — mirrors the NPM SDK's `showNonSsoModal`.
+  const showOtpGate = needsNonSsoAuth && !nonSsoDismissed;
+
+  // True when access is SSO (the default — any access_mode other than
+  // 'non_sso') but no identity has been resolved at all: the integrating app
+  // simply never supplied a userId. Mirrors the NPM SDK's condition for
+  // showing "Please log in to view your Rights Center." instead of empty/
+  // broken tab content.
+  const needsSsoLogin =
+    !userId && !internalAuth && rightsCenterSettings.access_mode !== 'non_sso';
+
+  // Non-SSO sessions are read-only in the Consent tab per the NPM SDK.
+  const isNonSsoReadOnly = !userId && !!internalAuth;
+
+  const sendOtp = async () => {
+    if (!phone.trim()) {
+      setOtpError('Enter a phone number');
+      return;
+    }
+    setOtpSending(true);
+    setOtpError(null);
+    try {
+      await api.sendOtp(phone.trim(), countryCode.trim(), assetId);
+      setOtpSent(true);
+      setOtpCooldown(30);
+    } catch (e) {
+      setOtpError('Failed to send OTP. Please try again.');
+    } finally {
+      setOtpSending(false);
+    }
+  };
+
+  const resendOtp = async () => {
+    if (otpResendsUsed >= 3 || otpCooldown > 0) return;
+    setOtpResendsUsed((n) => n + 1);
+    await sendOtp();
+  };
+
+  const verifyOtp = async () => {
+    if (otp.trim().length < 4) {
+      setOtpError('Enter the OTP you received');
+      return;
+    }
+    setOtpVerifying(true);
+    setOtpError(null);
+    try {
+      const result = await api.verifyOtp(phone.trim(), countryCode.trim(), otp.trim(), assetId);
+      setInternalAuth({ accessToken: result.accessToken, dataPrincipalId: result.dataPrincipalId });
+    } catch (e) {
+      setOtpError('Incorrect or expired OTP. Please try again.');
+    } finally {
+      setOtpVerifying(false);
+    }
+  };
 
   // Generate a stable session ID for this Rights Center session
   const [sessionId] = useState(() => `rn-rc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -170,11 +273,134 @@ export default function NativeRightCenter({
   // Nominee dropdown state
   const [showRelationshipDropdown, setShowRelationshipDropdown] = useState(false);
 
+  // ─── Grievance chat ───────────────────────────────────────────────────────────
+  const [openTicketId, setOpenTicketId] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<GrievanceMessage[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatSending, setChatSending] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLive, setChatLive] = useState(false);
+  const chatSocketRef = React.useRef<WebSocket | null>(null);
+  const chatPollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  const chatScrollRef = React.useRef<ScrollView | null>(null);
+
+  const scrollChatToBottom = () => {
+    setTimeout(() => chatScrollRef.current?.scrollToEnd({ animated: true }), 50);
+  };
+
+  const stopChatRealtime = () => {
+    chatSocketRef.current?.close();
+    chatSocketRef.current = null;
+    if (chatPollRef.current) {
+      clearInterval(chatPollRef.current);
+      chatPollRef.current = null;
+    }
+  };
+
+  const fetchChatMessages = async (ticketId: string) => {
+    try {
+      const messages = await api.getGrievanceMessages(ticketId);
+      setChatMessages(messages);
+      scrollChatToBottom();
+    } catch (e) {
+      console.warn('[NativeRightCenter] fetchChatMessages error:', e);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const startChatPolling = (ticketId: string) => {
+    setChatLive(false);
+    if (chatPollRef.current) clearInterval(chatPollRef.current);
+    chatPollRef.current = setInterval(() => fetchChatMessages(ticketId), 5000);
+  };
+
+  /** Connects to the live chat WebSocket for real-time updates. Falls back to
+   * 5s polling if the socket errors, closes, or never opens — mirrors the NPM
+   * SDK's `RightCenter.jsx` chat behavior. React Native's global `WebSocket`
+   * (unlike browsers) can be used here with the same query-param auth shape
+   * as the NPM SDK, for parity with the backend's expected auth. */
+  const connectChatRealtime = (ticketId: string) => {
+    try {
+      const uri = api.grievanceWebSocketUri(ticketId);
+      const socket = new WebSocket(uri);
+      chatSocketRef.current = socket;
+      socket.onopen = () => setChatLive(true);
+      socket.onmessage = (event) => {
+        try {
+          const decoded = JSON.parse(event.data);
+          const message: GrievanceMessage = {
+            id: String(decoded.id ?? decoded.message_id ?? Date.now()),
+            sender: decoded.sender || 'system',
+            message: decoded.message || '',
+            created_at: decoded.created_at,
+          };
+          setChatMessages((prev) =>
+            prev.some((m) => m.id === message.id) ? prev : [...prev, message]
+          );
+          scrollChatToBottom();
+        } catch (e) {
+          console.warn('[NativeRightCenter] chat WS message parse error:', e);
+        }
+      };
+      socket.onerror = () => {
+        console.warn('[NativeRightCenter] chat WS error, falling back to polling');
+        startChatPolling(ticketId);
+      };
+      socket.onclose = () => {
+        if (openTicketId === ticketId) startChatPolling(ticketId);
+      };
+    } catch (e) {
+      console.warn('[NativeRightCenter] chat WS connect failed, falling back to polling:', e);
+      startChatPolling(ticketId);
+    }
+  };
+
+  const openTicket = (ticket: GrievanceTicket) => {
+    const ticketId = (ticket as any).ticket_id || ticket.id;
+    if (!ticketId) return;
+    setOpenTicketId(ticketId);
+    setChatMessages([]);
+    setChatLoading(true);
+    setChatLive(false);
+    fetchChatMessages(ticketId);
+    connectChatRealtime(ticketId);
+  };
+
+  const closeTicketThread = () => {
+    stopChatRealtime();
+    setOpenTicketId(null);
+    setChatMessages([]);
+    setChatLive(false);
+  };
+
+  const sendChatMessage = async () => {
+    const ticketId = openTicketId;
+    const text = chatInput.trim();
+    if (!ticketId || !text || chatSending) return;
+    setChatSending(true);
+    try {
+      const sent = await api.sendGrievanceMessage(ticketId, text);
+      setChatMessages((prev) => (prev.some((m) => m.id === sent.id) ? prev : [...prev, sent]));
+      setChatInput('');
+      scrollChatToBottom();
+    } catch (e) {
+      console.warn('[NativeRightCenter] sendChatMessage error:', e);
+      Alert.alert('Error', 'Failed to send message. Please try again.');
+    } finally {
+      setChatSending(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => stopChatRealtime();
+  }, []);
+
   // Fetch consents using new FlatPurpose-based API
   const fetchUserConsents = async () => {
     setConsentsLoading(true);
     try {
-      const data = await api.fetchUserConsents(userId, assetId).catch((err) => {
+      const data = await api.fetchUserConsents(effectiveUserId, assetId).catch((err) => {
         console.warn('[NativeRightCenter] fetchUserConsents failed, falling back to getUserConsents:', err);
         return null;
       });
@@ -186,7 +412,7 @@ export default function NativeRightCenter({
         setInitialConsents(map);
       } else {
         // Fallback: use old getUserConsents and adapt to flat list
-        const groups = await api.getUserConsents(userId, assetId).catch(() => []);
+        const groups = await api.getUserConsents(effectiveUserId, assetId).catch(() => []);
         const flat: FlatPurpose[] = groups.flatMap((cp) =>
           (cp.purposes || []).map((p) => ({
             id: p.id,
@@ -244,7 +470,7 @@ export default function NativeRightCenter({
     setNomineeLoading(true);
     setNomineeError(null);
     try {
-      const data = await api.getNominees(userId).catch((err) => {
+      const data = await api.getNominees(effectiveUserId).catch((err) => {
         console.warn('[NativeRightCenter] Error fetching nominees, using empty array:', err);
         return [];
       });
@@ -273,7 +499,7 @@ export default function NativeRightCenter({
     setTicketsLoading(true);
     setTicketsError(null);
     try {
-      const data = await api.getGrievanceTickets(userId).catch((err) => {
+      const data = await api.getGrievanceTickets(effectiveUserId).catch((err) => {
         console.warn('[NativeRightCenter] Error fetching grievances, using empty array:', err);
         return [];
       });
@@ -290,13 +516,16 @@ export default function NativeRightCenter({
   const fetchRightsCenterSettings = async () => {
     try {
       const settings = await api.getRightsCenterSettings(assetId).catch(() => null);
-      if (!settings) return;
-      setRightsCenterSettings((prev: any) => ({
-        ...prev,
-        ...settings,
-      }));
+      if (!settings) return null;
+      let merged: any;
+      setRightsCenterSettings((prev: any) => {
+        merged = { ...prev, ...settings };
+        return merged;
+      });
+      return merged ?? settings;
     } catch (err) {
       console.warn('[NativeRightCenter] Failed to fetch rights center settings:', err);
+      return null;
     }
   };
 
@@ -304,13 +533,24 @@ export default function NativeRightCenter({
     let cancelled = false;
     const run = async () => {
       setIsInitializing(true);
-      await Promise.allSettled([
-        fetchRightsCenterSettings(),
-        fetchUserConsents(),
-        fetchDPO(),
-        fetchNominees(),
-        fetchGrievances(),
-      ]);
+      // Settings must be fetched first: they determine whether non-SSO OTP
+      // auth is required before any other (user-scoped) data can be fetched.
+      const settings = await fetchRightsCenterSettings();
+      const stillNeedsAuth =
+        !userId && settings?.access_mode === 'non_sso' && !internalAuth;
+      if (stillNeedsAuth) {
+        if (!cancelled) setIsInitializing(false);
+        return;
+      }
+      const stillNoIdentity = !userId && !internalAuth;
+      const fetches = [fetchDPO()];
+      // User-scoped endpoints; skip them entirely when no identity has been
+      // resolved (SSO mode, signed-out visitor) rather than firing requests
+      // that can only fail.
+      if (!stillNoIdentity) {
+        fetches.push(fetchUserConsents(), fetchNominees(), fetchGrievances());
+      }
+      await Promise.allSettled(fetches);
       if (!cancelled) setIsInitializing(false);
     };
 
@@ -318,7 +558,7 @@ export default function NativeRightCenter({
     return () => {
       cancelled = true;
     };
-  }, [userId, assetId]);
+  }, [userId, assetId, internalAuth]);
 
   // Consent handlers
   const handleToggle = (purposeId: string) => {
@@ -359,7 +599,7 @@ export default function NativeRightCenter({
         return;
       }
 
-      await api.saveConsentFromRightsCenter(userId, changedPurposes, assetId, sessionId);
+      await api.saveConsentFromRightsCenter(effectiveUserId, changedPurposes, assetId, sessionId);
 
       setDirty(false);
       setChangedPurposeIds(new Set());
@@ -367,7 +607,7 @@ export default function NativeRightCenter({
       setTimeout(() => setShowSaveSuccess(false), 3000);
 
       // Re-fetch to get server-confirmed state
-      const fresh = await api.fetchUserConsents(userId, assetId).catch(() => null);
+      const fresh = await api.fetchUserConsents(effectiveUserId, assetId).catch(() => null);
       if (fresh) {
         setConsents(fresh);
         const map: Record<string, string> = {};
@@ -385,8 +625,8 @@ export default function NativeRightCenter({
     if (e) e.preventDefault();
     const nominee = nominees[0];
     const payload: Nominee = {
-      user_id: userId,
-      client_user_id: userId,
+      user_id: effectiveUserId,
+      client_user_id: effectiveUserId,
       ...nomineeForm,
     };
 
@@ -447,7 +687,7 @@ export default function NativeRightCenter({
   const handleGrievanceSubmit = async (e?: any) => {
     if (e) e.preventDefault();
     const payload: GrievanceTicket = {
-      client_user_id: userId,
+      client_user_id: effectiveUserId,
       subject: grievanceForm.subject,
       category: grievanceForm.category,
       description: grievanceForm.description,
@@ -471,7 +711,7 @@ export default function NativeRightCenter({
   // Rights request handlers (web parity)
   const handleAccessRequest = async () => {
     try {
-      await api.createAccessRequest(userId, assetId);
+      await api.createAccessRequest(effectiveUserId, assetId);
       setAccessConfirmed(true);
       setTimeout(() => {
         setShowAccessModal(false);
@@ -485,7 +725,7 @@ export default function NativeRightCenter({
 
   const handleDeleteRequest = async () => {
     try {
-      await api.createDeletionRequest(userId, assetId);
+      await api.createDeletionRequest(effectiveUserId, assetId);
       setDeleteConfirmed(true);
       setTimeout(() => {
         setShowDeleteModal(false);
@@ -506,6 +746,123 @@ export default function NativeRightCenter({
         <Text style={styles.loadingText}>Loading Rights Center...</Text>
       </View>
     );
+  }
+
+  if (showOtpGate) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.background }]}>
+        <ScrollView contentContainerStyle={otpStyles.container}>
+          <View style={otpStyles.titleRow}>
+            <Text style={[otpStyles.title, { color: theme.textPrimary, flex: 1 }]}>
+              Verify your phone number
+            </Text>
+            <TouchableOpacity
+              onPress={() => setNonSsoDismissed(true)}
+              accessibilityLabel="Close"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={{ color: theme.textSecondary, fontSize: 18 }}>×</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={[otpStyles.subtitle, { color: theme.textSecondary }]}>
+            {otpSent
+              ? `Enter the OTP sent to ${countryCode}${phone}`
+              : 'We need to verify your identity before showing your data rights.'}
+          </Text>
+          {!otpSent ? (
+            <>
+              <View style={otpStyles.row}>
+                <TextInput
+                  value={countryCode}
+                  onChangeText={setCountryCode}
+                  keyboardType="phone-pad"
+                  style={[otpStyles.codeInput, { borderColor: theme.border }]}
+                  placeholder="+91"
+                />
+                <TextInput
+                  value={phone}
+                  onChangeText={setPhone}
+                  keyboardType="phone-pad"
+                  style={[otpStyles.phoneInput, { borderColor: theme.border }]}
+                  placeholder="Phone number"
+                />
+              </View>
+              {otpError && <Text style={otpStyles.error}>{otpError}</Text>}
+              <TouchableOpacity
+                style={[otpStyles.button, { backgroundColor: theme.button }]}
+                onPress={sendOtp}
+                disabled={otpSending}
+              >
+                {otpSending ? (
+                  <ActivityIndicator size="small" color={theme.buttonText} />
+                ) : (
+                  <Text style={{ color: theme.buttonText, fontWeight: '600' }}>Send OTP</Text>
+                )}
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <TextInput
+                value={otp}
+                onChangeText={setOtp}
+                keyboardType="number-pad"
+                maxLength={6}
+                style={[otpStyles.otpInput, { borderColor: theme.border }]}
+                placeholder="••••••"
+              />
+              {otpError && <Text style={otpStyles.error}>{otpError}</Text>}
+              <TouchableOpacity
+                style={[otpStyles.button, { backgroundColor: theme.button }]}
+                onPress={verifyOtp}
+                disabled={otpVerifying}
+              >
+                {otpVerifying ? (
+                  <ActivityIndicator size="small" color={theme.buttonText} />
+                ) : (
+                  <Text style={{ color: theme.buttonText, fontWeight: '600' }}>Verify</Text>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={resendOtp}
+                disabled={otpResendsUsed >= 3 || otpCooldown > 0}
+                style={otpStyles.resendButton}
+              >
+                <Text style={{ color: theme.textSecondary }}>
+                  {otpCooldown > 0
+                    ? `Resend OTP in ${otpCooldown}s`
+                    : otpResendsUsed >= 3
+                    ? 'No more resends available'
+                    : 'Resend OTP'}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  if (needsSsoLogin) {
+    return (
+      <View
+        style={[
+          styles.container,
+          styles.centerContent,
+          { backgroundColor: theme.background },
+        ]}
+      >
+        <Text style={{ color: theme.textSecondary, textAlign: 'center', paddingHorizontal: 24 }}>
+          Please log in to view your Rights Center.
+        </Text>
+      </View>
+    );
+  }
+
+  if (!effectiveUserId) {
+    // Non-SSO configured, but the OTP screen was dismissed without
+    // completing verification: nothing to show without an identity.
+    // Mirrors the NPM SDK, which leaves this state blank too.
+    return <View style={[styles.container, { backgroundColor: theme.background }]} />;
   }
 
   return (
@@ -579,6 +936,7 @@ export default function NativeRightCenter({
             onToggle={handleToggle}
             onSave={handleSave}
             onInfoClick={setModalData}
+            readOnly={isNonSsoReadOnly}
           />
         )}
 
@@ -651,7 +1009,21 @@ export default function NativeRightCenter({
         )}
 
         {activeTab === 'Grievance' && (
-          rightsCenterSettings.grievance_mode === 'external' ? (
+          openTicketId ? (
+            <GrievanceThread
+              theme={theme}
+              ticket={tickets.find((t) => ((t as any).ticket_id || t.id) === openTicketId) || null}
+              messages={chatMessages}
+              loading={chatLoading}
+              sending={chatSending}
+              live={chatLive}
+              input={chatInput}
+              onInputChange={setChatInput}
+              onSend={sendChatMessage}
+              onClose={closeTicketThread}
+              scrollRef={chatScrollRef}
+            />
+          ) : rightsCenterSettings.grievance_mode === 'external' ? (
             <View>
               <Text style={[styles.sectionTitle, { color: theme.textPrimary }]}>Grievance</Text>
               <Text style={[styles.sectionSubtitle, { color: theme.textSecondary }]}>
@@ -686,6 +1058,7 @@ export default function NativeRightCenter({
               onToggleForm={() => setShowGrievanceForm(!showGrievanceForm)}
               showCategoryDropdown={showCategoryDropdown}
               onToggleCategoryDropdown={() => setShowCategoryDropdown(!showCategoryDropdown)}
+              onOpenTicket={openTicket}
             />
           )
         )}
@@ -829,7 +1202,18 @@ function SelectDropdown({ label, placeholder, value, options, onSelect, visible,
 }
 
 // Tab Components
-function ConsentTab({ theme, settings, consents, consentsLoading, dirty, showSaveSuccess, onToggle, onSave, onInfoClick }: any) {
+function ConsentTab({
+  theme,
+  settings,
+  consents,
+  consentsLoading,
+  dirty,
+  showSaveSuccess,
+  onToggle,
+  onSave,
+  onInfoClick,
+  readOnly,
+}: any) {
   if (consentsLoading) {
     return (
       <View style={styles.centerContent}>
@@ -838,6 +1222,15 @@ function ConsentTab({ theme, settings, consents, consentsLoading, dirty, showSav
       </View>
     );
   }
+
+  // Non-SSO: only show purposes with a genuine logged decision
+  // (timestamp > 0), split into "Mandatory Processing" (no consent
+  // required) and everything else — mirrors the NPM SDK's RightCenter.jsx.
+  const visibleConsents: FlatPurpose[] = readOnly
+    ? (consents as FlatPurpose[]).filter((p) => (p.timestamp ?? 0) > 0)
+    : consents;
+  const mandatoryLogged = readOnly ? visibleConsents.filter((p) => p.is_mandatory) : [];
+  const otherLogged = readOnly ? visibleConsents.filter((p) => !p.is_mandatory) : visibleConsents;
 
   const getDataElementsText = (p: FlatPurpose) => {
     const elements = Array.isArray(p.dataElements) ? p.dataElements : [];
@@ -860,6 +1253,79 @@ function ConsentTab({ theme, settings, consents, consentsLoading, dirty, showSav
       .join(', ');
   };
 
+  const renderCard = (p: FlatPurpose) => (
+    <View key={p.id} style={[styles.purposeCard, { borderColor: theme.border }]}>
+      {/* Header Row: Purpose name, badge, legitimate badge, and toggle */}
+      <View style={styles.cardHeaderRow}>
+        <View style={styles.purposeHeaderLeft}>
+          <Text style={[styles.purposeTitle, { color: theme.textPrimary }]}>{p.name}</Text>
+          <Text
+            style={[
+              styles.badge,
+              p.is_mandatory ? styles.badgeMandatory : styles.badgeOptional,
+            ]}
+          >
+            {p.is_mandatory ? 'Necessary' : 'Optional'}
+          </Text>
+          {p.isLegitimate && (
+            <Text style={styles.badgeLegitimate}>Legitimate Interest</Text>
+          )}
+        </View>
+        {!readOnly && (
+          <View style={styles.toggleSection}>
+            <Switch
+              value={p.consented === 'accepted'}
+              onValueChange={() => !p.isLegitimate && onToggle(p.id)}
+              disabled={p.isLegitimate}
+              trackColor={{ false: '#ccc', true: theme.button }}
+            />
+          </View>
+        )}
+      </View>
+
+      {/* Expiry Period */}
+      <View style={styles.metaRow}>
+        <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Expiry:</Text>
+        <Text style={[styles.metaValue, { color: theme.textPrimary }]}>
+          {p.expiry_period || 'Not specified'}
+        </Text>
+      </View>
+
+      {/* Processing Activity */}
+      <View style={styles.metaRow}>
+        <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Processing:</Text>
+        <Text style={[styles.metaValue, { color: theme.textPrimary }]}>
+          {getProcessingText(p)}
+        </Text>
+      </View>
+
+      {/* Consented Status pill */}
+      <View style={styles.statusRow}>
+        <View style={styles.statusItem}>
+          <Text style={[styles.statusLabel, { color: theme.textSecondary }]}>Consented:</Text>
+          <Text
+            style={[
+              styles.statusValue,
+              p.consented === 'accepted'
+                ? { backgroundColor: theme.button, color: theme.buttonText }
+                : { backgroundColor: '#ef4444', color: '#ffffff' },
+            ]}
+          >
+            {p.consented === 'accepted' ? 'Yes' : 'No'}
+          </Text>
+        </View>
+      </View>
+
+      {/* Data Elements chips */}
+      <View style={styles.metaRow}>
+        <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Data Elements:</Text>
+        <Text style={[styles.metaValue, { color: theme.textPrimary }]}>
+          {getDataElementsText(p)}
+        </Text>
+      </View>
+    </View>
+  );
+
   return (
     <View style={styles.tabContent}>
       <View style={styles.sectionHeader}>
@@ -868,7 +1334,7 @@ function ConsentTab({ theme, settings, consents, consentsLoading, dirty, showSav
             {settings?.consents_section_title || 'Manage your Consents here!'}
           </Text>
         </View>
-        {dirty && (
+        {dirty && !readOnly && (
           <TouchableOpacity style={[styles.saveButton, { backgroundColor: theme.button }]} onPress={onSave}>
             <Text style={[styles.saveButtonText, { color: theme.buttonText }]}>Save Changes</Text>
           </TouchableOpacity>
@@ -881,82 +1347,21 @@ function ConsentTab({ theme, settings, consents, consentsLoading, dirty, showSav
         </View>
       )}
 
-      {consents.length === 0 ? (
+      {visibleConsents.length === 0 ? (
         <View style={styles.centerContent}>
           <Text style={styles.emptyText}>You currently have no consent records to display.</Text>
         </View>
       ) : (
         <View>
-          {(consents as FlatPurpose[]).map((p) => (
-            <View key={p.id} style={[styles.purposeCard, { borderColor: theme.border }]}>
-              {/* Header Row: Purpose name, badge, legitimate badge, and toggle */}
-              <View style={styles.cardHeaderRow}>
-                <View style={styles.purposeHeaderLeft}>
-                  <Text style={[styles.purposeTitle, { color: theme.textPrimary }]}>{p.name}</Text>
-                  <Text
-                    style={[
-                      styles.badge,
-                      p.is_mandatory ? styles.badgeMandatory : styles.badgeOptional,
-                    ]}
-                  >
-                    {p.is_mandatory ? 'Necessary' : 'Optional'}
-                  </Text>
-                  {p.isLegitimate && (
-                    <Text style={styles.badgeLegitimate}>Legitimate Interest</Text>
-                  )}
-                </View>
-                <View style={styles.toggleSection}>
-                  <Switch
-                    value={p.consented === 'accepted'}
-                    onValueChange={() => !p.isLegitimate && onToggle(p.id)}
-                    disabled={p.isLegitimate}
-                    trackColor={{ false: '#ccc', true: theme.button }}
-                  />
-                </View>
-              </View>
-
-              {/* Expiry Period */}
-              <View style={styles.metaRow}>
-                <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Expiry:</Text>
-                <Text style={[styles.metaValue, { color: theme.textPrimary }]}>
-                  {p.expiry_period || 'Not specified'}
-                </Text>
-              </View>
-
-              {/* Processing Activity */}
-              <View style={styles.metaRow}>
-                <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Processing:</Text>
-                <Text style={[styles.metaValue, { color: theme.textPrimary }]}>
-                  {getProcessingText(p)}
-                </Text>
-              </View>
-
-              {/* Consented Status pill */}
-              <View style={styles.statusRow}>
-                <View style={styles.statusItem}>
-                  <Text style={[styles.statusLabel, { color: theme.textSecondary }]}>Consented:</Text>
-                  <Text
-                    style={[
-                      styles.statusValue,
-                      p.consented === 'accepted'
-                        ? { backgroundColor: theme.button, color: theme.buttonText }
-                        : { backgroundColor: '#ef4444', color: '#ffffff' },
-                    ]}
-                  >
-                    {p.consented === 'accepted' ? 'Yes' : 'No'}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Data Elements chips */}
-              <View style={styles.metaRow}>
-                <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Data Elements:</Text>
-                <Text style={[styles.metaValue, { color: theme.textPrimary }]}>
-                  {getDataElementsText(p)}
-                </Text>
-              </View>
-            </View>
-          ))}
+          {otherLogged.map(renderCard)}
+          {readOnly && mandatoryLogged.length > 0 && (
+            <>
+              <Text style={[styles.sectionSubtitle, { color: theme.textSecondary, marginTop: 8 }]}>
+                Mandatory Processing (No Consent Required)
+              </Text>
+              {mandatoryLogged.map(renderCard)}
+            </>
+          )}
         </View>
       )}
     </View>
@@ -1183,8 +1588,11 @@ function NomineeTab({ theme, settings, nominee, editing, nomineeForm, loading, e
             </View>
           )}
           <View style={styles.nomineeActions}>
-            <TouchableOpacity style={styles.primaryButton} onPress={onEdit}>
-              <Text style={styles.primaryButtonText}>Edit</Text>
+            <TouchableOpacity
+              style={[styles.primaryButton, { backgroundColor: theme.button }]}
+              onPress={onEdit}
+            >
+              <Text style={[styles.primaryButtonText, { color: theme.buttonText }]}>Edit</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.dangerButton} onPress={onDelete}>
               <Text style={styles.dangerButtonText}>Delete</Text>
@@ -1255,7 +1663,128 @@ function NomineeTab({ theme, settings, nominee, editing, nomineeForm, loading, e
   );
 }
 
-function GrievanceTab({ theme, tickets, loading, error, showForm, form, onFormChange, onSubmit, onToggleForm, showCategoryDropdown, onToggleCategoryDropdown }: any) {
+function GrievanceThread({
+  theme,
+  ticket,
+  messages,
+  loading,
+  sending,
+  live,
+  input,
+  onInputChange,
+  onSend,
+  onClose,
+  scrollRef,
+}: any) {
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={[chatStyles.header, { borderBottomColor: theme.border }]}>
+        <TouchableOpacity onPress={onClose} style={chatStyles.backButton}>
+          <Text style={{ fontSize: 18, color: theme.textPrimary }}>{'←'}</Text>
+        </TouchableOpacity>
+        <View style={{ flex: 1 }}>
+          <Text style={[chatStyles.headerTitle, { color: theme.textPrimary }]} numberOfLines={1}>
+            {ticket?.subject || 'Ticket'}
+          </Text>
+          <Text style={{ fontSize: 11, color: live ? '#059669' : theme.textSecondary }}>
+            {live ? 'Live' : 'Updates every 5s'}
+          </Text>
+        </View>
+      </View>
+
+      {loading ? (
+        <View style={styles.centerContent}>
+          <ActivityIndicator size="large" />
+        </View>
+      ) : messages.length === 0 ? (
+        <View style={styles.centerContent}>
+          <Text style={{ color: theme.textSecondary }}>No messages yet. Say hello!</Text>
+        </View>
+      ) : (
+        <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={{ padding: 12 }}>
+          {messages.map((m: GrievanceMessage) => (
+            <View
+              key={m.id}
+              style={[
+                chatStyles.bubble,
+                m.sender === 'user'
+                  ? { alignSelf: 'flex-end', backgroundColor: theme.button }
+                  : { alignSelf: 'flex-start', backgroundColor: '#e5e7eb' },
+              ]}
+            >
+              <Text style={{ color: m.sender === 'user' ? theme.buttonText : '#111827' }}>
+                {m.message}
+              </Text>
+            </View>
+          ))}
+        </ScrollView>
+      )}
+
+      <View style={[chatStyles.inputRow, { borderTopColor: theme.border }]}>
+        <TextInput
+          value={input}
+          onChangeText={onInputChange}
+          placeholder="Type a message…"
+          style={[chatStyles.input, { borderColor: theme.border }]}
+          multiline
+          onSubmitEditing={onSend}
+        />
+        <TouchableOpacity onPress={onSend} disabled={sending} style={chatStyles.sendButton}>
+          {sending ? (
+            <ActivityIndicator size="small" color={theme.button} />
+          ) : (
+            <Text style={{ color: theme.button, fontWeight: '700' }}>Send</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const chatStyles = StyleSheet.create({
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+  },
+  backButton: {
+    marginRight: 8,
+    padding: 4,
+  },
+  headerTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  bubble: {
+    maxWidth: '75%',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    padding: 8,
+    borderTopWidth: 1,
+  },
+  input: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    maxHeight: 100,
+  },
+  sendButton: {
+    marginLeft: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+});
+
+function GrievanceTab({ theme, tickets, loading, error, showForm, form, onFormChange, onSubmit, onToggleForm, showCategoryDropdown, onToggleCategoryDropdown, onOpenTicket }: any) {
   if (loading) {
     return (
       <View style={styles.centerContent}>
@@ -1339,7 +1868,11 @@ function GrievanceTab({ theme, tickets, loading, error, showForm, form, onFormCh
             const ticketRef = (ticket as any).ticket_id || ticket.id;
 
             return (
-              <View key={index} style={[styles.ticketCard, { backgroundColor: theme.background, borderColor: theme.border }]}> 
+              <TouchableOpacity
+                key={index}
+                style={[styles.ticketCard, { backgroundColor: theme.background, borderColor: theme.border }]}
+                onPress={() => onOpenTicket?.(ticket)}
+              >
                 <View style={styles.ticketHeader}>
                   <Text style={[styles.ticketSubject, { color: theme.textPrimary }]}>{ticket.subject}</Text>
                   <Text style={[styles.ticketStatus, { backgroundColor: theme.successBg, color: theme.successText }]}>
@@ -1355,7 +1888,10 @@ function GrievanceTab({ theme, tickets, loading, error, showForm, form, onFormCh
                     <Text style={[styles.ticketMetaItem, { color: theme.textPrimary }]}>Category: {ticket.category}</Text>
                   )}
                 </View>
-              </View>
+                <Text style={[styles.ticketMetaItem, { color: theme.textSecondary, marginTop: 6 }]}>
+                  {'\u{1F4AC} View conversation'}
+                </Text>
+              </TouchableOpacity>
             );
           })
         )}
@@ -1363,6 +1899,72 @@ function GrievanceTab({ theme, tickets, loading, error, showForm, form, onFormCh
     </View>
   );
 }
+
+const otpStyles = StyleSheet.create({
+  container: {
+    padding: 24,
+    alignItems: 'stretch',
+    maxWidth: 360,
+    alignSelf: 'center',
+    width: '100%',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  row: {
+    flexDirection: 'row',
+    marginBottom: 16,
+  },
+  codeInput: {
+    width: 72,
+    borderWidth: 1,
+    borderRadius: 6,
+    padding: 10,
+    marginRight: 12,
+  },
+  phoneInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 6,
+    padding: 10,
+  },
+  otpInput: {
+    borderWidth: 1,
+    borderRadius: 6,
+    padding: 10,
+    fontSize: 20,
+    letterSpacing: 8,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  button: {
+    borderRadius: 8,
+    paddingVertical: 13,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  resendButton: {
+    marginTop: 12,
+    alignItems: 'center',
+  },
+  error: {
+    color: 'red',
+    fontSize: 12,
+    marginBottom: 8,
+  },
+});
 
 const styles = StyleSheet.create({
   container: {

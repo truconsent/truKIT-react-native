@@ -25,10 +25,16 @@ import { useBanner } from '../hooks/useBanner';
 import { useConsent } from '../hooks/useConsent';
 import { submitConsent, submitSuppression, DEFAULT_API_URL } from '../core/BannerService';
 import { generateRequestId } from '../utils/RequestIdGenerator';
+import { resolveTemplateKey } from '../core/templateRegistry';
+import { deriveBannerThemeColors } from '../utils/ColorUtils';
+import { getAvailableLanguages, createTranslator } from '../utils/translationSnapshot';
 import BannerUI from './BannerUI';
 import CookieBannerUI from './CookieBannerUI';
-import ModernBannerHeader from './ModernBannerHeader';
-import ModernBannerFooter from './ModernBannerFooter';
+import PreferencesModalUI from './PreferencesModalUI';
+import NoticeOnlyBanner from './NoticeOnlyBanner';
+import CompactListUI from './CompactListUI';
+import SplitPaneUI from './SplitPaneUI';
+import InlineSingleRowUI from './InlineSingleRowUI';
 import HCaseWarningModal from './HCaseWarningModal';
 
 export default function TruConsentModal(props: TruConsentConfig) {
@@ -52,6 +58,7 @@ export default function TruConsentModal(props: TruConsentConfig) {
   const [visible, setVisible] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedLanguage, setSelectedLanguage] = useState('en');
 
   // Session & performance tracking
   const [sessionId] = useState(
@@ -159,14 +166,26 @@ export default function TruConsentModal(props: TruConsentConfig) {
     }
   }, [banner, isLoading]);
 
-  // Auto-hide if consentStatus is complete or no purposes (and not re-consent mode)
+  // Auto-hide only when the CP has no purposes to show — not when already
+  // consented. Matches truKIT-NPM's TruConsentModal.jsx exactly (see its
+  // own comment there): users should always be able to reopen the banner
+  // to view or update their preferences, so an already-complete
+  // consentStatus must NOT auto-hide here. It previously did, and reported
+  // 'no_action' when it fired — `isConsentActionSuccessful`-style callbacks
+  // in consuming apps correctly treat 'no_action' as "no decision was
+  // made", so a user who had *already consented* on a prior visit got a
+  // false "Application Not Submitted — consent was rejected" error despite
+  // never having declined anything, and despite the previous approval
+  // still being the correct, current consent. If a consuming app wants to
+  // skip showing the banner again after a completed decision, that's its
+  // own responsibility to cache — truKIT-NPM's own consuming demos do this
+  // themselves rather than relying on the SDK to guess.
   useEffect(() => {
     if (banner && !isLoading && !isReconsentMode) {
       const hasNoPurposes =
         !banner.purposes || banner.purposes.length === 0;
-      const isComplete = (banner as any).consentStatus === 'complete';
-      if (isComplete || hasNoPurposes) {
-        console.log('Auto-hiding banner: consentStatus=complete or no purposes');
+      if (hasNoPurposes) {
+        console.log('Auto-hiding banner: no purposes to show');
         setVisible(false);
         if (onClose) onClose('no_action');
       }
@@ -178,10 +197,31 @@ export default function TruConsentModal(props: TruConsentConfig) {
     (banner && (banner.organization_name || banner.organization?.name)) || companyName;
   const resolvedLogoUrl = (banner && banner.organization?.logo_url) || logoUrl;
 
-  const templateKey = (banner?.banner_settings as any)?.general_notice_template || 'center_modal';
+  const resolvedTemplateKey = resolveTemplateKey(
+    (banner?.banner_settings as any)?.general_notice_template,
+    { consentType: banner?.consent_type }
+  );
 
   const primaryColor =
-    (banner?.banner_settings as any)?.primary_color || '#7030bc';
+    (banner?.banner_settings as any)?.primary_color || '#3b82f6';
+
+  // "Common Appearance" theme (background/text/button colors, font) from the
+  // admin dashboard, applied throughout BannerUI and its children.
+  const bannerTheme = deriveBannerThemeColors((banner?.banner_settings as any) || {});
+
+  // Server-driven translations for dynamic content (purpose names, banner
+  // title/disclaimer/footer) — the language list and translated text both
+  // come from the API's snapshot, not a fixed built-in set of languages.
+  const translationSnapshot =
+    (banner as any)?.translationsSnapshot || (banner as any)?.translations_snapshot;
+  const { availableLanguages, languageLabels } = useMemo(
+    () => getAvailableLanguages(translationSnapshot),
+    [translationSnapshot]
+  );
+  const translate = useMemo(
+    () => createTranslator(translationSnapshot, selectedLanguage),
+    [translationSnapshot, selectedLanguage]
+  );
 
   const hCaseStrategy: 'soft_first' | 'hard_immediate' =
     (banner?.banner_settings as any)?.h_case_logging_strategy ?? 'soft_first';
@@ -414,13 +454,28 @@ export default function TruConsentModal(props: TruConsentConfig) {
   const handleAcceptSelected = async () => {
     if (!banner) return;
 
-    const consentPayload: Purpose[] = purposes.map((p) =>
-      p.is_mandatory ? { ...p, consented: 'accepted' as const } : p
-    );
-
-    const anyOptionalAccepted = consentPayload.some(
+    // ModernBannerActions.tsx's dynamic third button reuses this single
+    // handler for two distinct modes, decided by the label the user just
+    // saw: "Only Necessary" (no optional purpose currently accepted) or
+    // "Accept Selected" (at least one is). Must be computed from the
+    // *current* state before building the payload — the same check
+    // ModernBannerActions.tsx's own `hasOptionalAccepted` uses for the
+    // label — so the two can never disagree about which mode is active.
+    const anyOptionalAccepted = purposes.some(
       (p) => !p.is_mandatory && p.consented === 'accepted'
     );
+
+    const consentPayload: Purpose[] = purposes.map((p) => {
+      if (p.is_mandatory) return { ...p, consented: 'accepted' as const };
+      // "Only Necessary" mode: force every optional purpose to declined
+      // regardless of its current toggle state — matches truKIT-NPM's
+      // reference `onlyNecessary` handler (useConsentEngine.js) and this
+      // file's own handleAcceptMandatory. Without this, an optional purpose
+      // that already reads 'accepted' (e.g. a `defaultSelection` other than
+      // 'mandatory_only', or a residual toggle) makes the submitted action
+      // 'approved' even though the button visibly read "Only Necessary".
+      return anyOptionalAccepted ? p : { ...p, consented: 'declined' as const };
+    });
 
     // If user clicked "Save Preferences" determine if it's really onlyNecessary
     const buttonUsed = anyOptionalAccepted ? 'save_preferences' : 'only_necessary';
@@ -452,6 +507,35 @@ export default function TruConsentModal(props: TruConsentConfig) {
           : 'partial_consent';
 
       const meta = buildMetadata(buttonUsed);
+      await submitPurposes(consentAction, buildAllPurposesPayload(consentPayload), meta);
+      fireSuppressionIfNeeded(consentPayload);
+      close(consentAction);
+    } catch (e: any) {
+      setError('Something went wrong. Please try again.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Unlike handleAcceptSelected (which respects the user's current toggles),
+  // this forces every optional purpose to declined regardless of its current
+  // state — a true "Only Necessary" action, used by templates (e.g.
+  // PreferencesModalUI) that expose it as a distinct button from
+  // "Save Preferences".
+  const handleAcceptMandatory = async () => {
+    if (!banner) return;
+
+    const consentPayload: Purpose[] = purposes.map((p) => ({
+      ...p,
+      consented: p.is_mandatory ? ('accepted' as const) : ('declined' as const),
+    }));
+
+    setActionLoading(true);
+    setError(null);
+    try {
+      const hasOptional = consentPayload.some((p) => !p.is_mandatory);
+      const consentAction: ConsentAction = hasOptional ? 'partial_consent' : 'approved';
+      const meta = buildMetadata('only_necessary');
       await submitPurposes(consentAction, buildAllPurposesPayload(consentPayload), meta);
       fireSuppressionIfNeeded(consentPayload);
       close(consentAction);
@@ -539,9 +623,6 @@ export default function TruConsentModal(props: TruConsentConfig) {
 
   const displayError = error || bannerError;
 
-  const isNoticeOnly =
-    uiState.noticeOnly || templateKey === 'notice_only';
-
   return (
     <I18nextProvider i18n={i18n}>
       <Modal
@@ -595,62 +676,21 @@ export default function TruConsentModal(props: TruConsentConfig) {
 
                 {!displayError && banner && (
                   <>
-                    {isNoticeOnly && banner.consent_type !== 'cookie_consent' ? (
-                      <View>
-                        {noticePurposesPayload.length > 0 || allNormalizedPurposes.length > 0 ? (
-                          <>
-                            <ModernBannerHeader
-                              logoUrl={(banner?.banner_settings as any)?.logo_url || resolvedLogoUrl}
-                              orgName={resolvedCompanyName}
-                              bannerTitle={(banner?.banner_settings as any)?.banner_title}
-                              disclaimerText={(banner?.banner_settings as any)?.disclaimer_text}
-                            />
-
-                            <View style={{ paddingHorizontal: 24, paddingTop: 4 }}>
-                              {allNormalizedPurposes.map((p) => (
-                                <View key={p.id} style={styles.noticePurposeCard}>
-                                  <Text style={styles.noticePurposeTitle}>{p.name}</Text>
-                                  {p.description ? (
-                                    <Text style={styles.noticePurposeDescription}>{p.description}</Text>
-                                  ) : null}
-                                </View>
-                              ))}
-                            </View>
-
-                            <View style={{ marginTop: 16 }}>
-                              <ModernBannerFooter
-                                footerText={
-                                  (banner?.banner_settings as any)?.footer_text ||
-                                  'Review our [Privacy Policy] and [Transparency Centre], [DPO Details]. Use the [Rights Centre] anytime to withdraw consent, delete data, name a nominee, or raise a grievance.'
-                                }
-                                orgName={resolvedCompanyName}
-                              />
-
-                              <TouchableOpacity
-                                style={[
-                                  styles.noticeAcknowledgeButton,
-                                  { backgroundColor: primaryColor, opacity: actionLoading ? 0.7 : 1 },
-                                ]}
-                                onPress={handleAcknowledgeNotice}
-                                disabled={actionLoading}
-                              >
-                                {actionLoading ? (
-                                  <ActivityIndicator size="small" color="#fff" />
-                                ) : (
-                                  <Text style={styles.noticeAcknowledgeButtonText}>
-                                    {(banner?.banner_settings as any)?.action_button_text || 'I Understand'}
-                                  </Text>
-                                )}
-                              </TouchableOpacity>
-                            </View>
-                          </>
-                        ) : (
-                          <View style={styles.errorContainer}>
-                            <Text style={styles.errorText}>No notice content available</Text>
-                          </View>
-                        )}
+                    {resolvedTemplateKey === 'notice_only' &&
+                    noticePurposesPayload.length === 0 &&
+                    allNormalizedPurposes.length === 0 ? (
+                      <View style={styles.errorContainer}>
+                        <Text style={styles.errorText}>No notice content available</Text>
                       </View>
-                    ) : banner.consent_type === 'cookie_consent' ? (
+                    ) : resolvedTemplateKey === 'notice_only' ? (
+                      <NoticeOnlyBanner
+                        banner={{ ...banner, purposes: purposes as Purpose[] }}
+                        companyName={resolvedCompanyName}
+                        logoUrl={resolvedLogoUrl}
+                        onAcknowledge={handleAcknowledgeNotice}
+                        primaryColor={primaryColor}
+                      />
+                    ) : resolvedTemplateKey === 'floating_card' ? (
                       <CookieBannerUI
                         banner={banner}
                         companyName={resolvedCompanyName}
@@ -658,11 +698,61 @@ export default function TruConsentModal(props: TruConsentConfig) {
                         onRejectAll={handleRejectAll}
                         onConsentAll={handleConsentAll}
                       />
+                    ) : resolvedTemplateKey === 'preferences_modal' ? (
+                      <PreferencesModalUI
+                        banner={{ ...banner, purposes: purposes as Purpose[] }}
+                        companyName={resolvedCompanyName}
+                        logoUrl={resolvedLogoUrl}
+                        onChangePurpose={updatePurpose}
+                        onAcceptMandatory={handleAcceptMandatory}
+                        onAcceptSelected={handleAcceptSelected}
+                        onConsentAll={handleConsentAll}
+                        primaryColor={primaryColor}
+                      />
+                    ) : resolvedTemplateKey === 'general_compact_list' ? (
+                      <CompactListUI
+                        banner={{ ...banner, purposes: purposes as Purpose[] }}
+                        companyName={resolvedCompanyName}
+                        logoUrl={resolvedLogoUrl}
+                        onChangePurpose={updatePurpose}
+                        onRejectAll={handleRejectAll}
+                        onConsentAll={handleConsentAll}
+                        onAcceptSelected={handleAcceptSelected}
+                        primaryColor={primaryColor}
+                      />
+                    ) : resolvedTemplateKey === 'general_split_pane' ? (
+                      <SplitPaneUI
+                        banner={{ ...banner, purposes: purposes as Purpose[] }}
+                        companyName={resolvedCompanyName}
+                        logoUrl={resolvedLogoUrl}
+                        onChangePurpose={updatePurpose}
+                        onRejectAll={handleRejectAll}
+                        onConsentAll={handleConsentAll}
+                        onAcceptSelected={handleAcceptSelected}
+                        primaryColor={primaryColor}
+                      />
+                    ) : resolvedTemplateKey === 'inline_single_row' ? (
+                      <InlineSingleRowUI
+                        banner={{ ...banner, purposes: purposes as Purpose[] }}
+                        companyName={resolvedCompanyName}
+                        logoUrl={resolvedLogoUrl}
+                        onChangePurpose={updatePurpose}
+                        onRejectAll={handleRejectAll}
+                        onConsentAll={handleConsentAll}
+                        onAcceptSelected={handleAcceptSelected}
+                        primaryColor={primaryColor}
+                      />
                     ) : (
                       <BannerUI
                         banner={{ ...banner, purposes: purposes as Purpose[] }}
                         companyName={resolvedCompanyName}
                         logoUrl={resolvedLogoUrl}
+                        theme={bannerTheme}
+                        translate={translate}
+                        selectedLanguage={selectedLanguage}
+                        availableLanguages={availableLanguages}
+                        languageLabels={languageLabels}
+                        onLanguageChange={setSelectedLanguage}
                         onChangePurpose={updatePurpose}
                         onRejectAll={handleRejectAll}
                         onConsentAll={handleConsentAll}
@@ -697,6 +787,8 @@ export default function TruConsentModal(props: TruConsentConfig) {
         onProceed={handleHCaseProceed}
         onBack={handleHCaseBack}
         primaryColor={primaryColor}
+        proceedColor={(banner?.banner_settings as any)?.h_case_proceed_button_color}
+        backColor={(banner?.banner_settings as any)?.h_case_back_button_color}
       />
     </I18nextProvider>
   );

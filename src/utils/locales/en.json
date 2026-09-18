@@ -13,6 +13,14 @@
   "legal_entities": "Legal Entities",
   "tools": "Tools",
   "processing_activities": "Processing Activities",
-  "data_processors": "Data Processors"
+  "data_processors": "Data Processors",
+  "informational": "Informational",
+  "consent": "Consent",
+  "necessary_group": "Necessary",
+  "optional_group": "Optional",
+  "profile_based_group": "Profile Based",
+  "no_consent_purposes": "No consent purposes available",
+  "no_purposes_available": "No purposes available",
+  "select_language": "Select Language"
 }
 

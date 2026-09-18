@@ -3,13 +3,20 @@
  */
 import React from 'react';
 import { View, Text, StyleSheet, Linking } from 'react-native';
+import { BannerTheme } from '../utils/ColorUtils';
 
 export interface ModernBannerFooterProps {
   footerText: string;
   orgName: string;
+  theme?: BannerTheme;
+  translate?: (text: string) => string;
 }
 
-function convertMarkdownLinks(text: string): React.ReactNode[] {
+function convertMarkdownLinks(
+  text: string,
+  linkColor: string,
+  fontFamily?: string
+): React.ReactNode[] {
   const markdownLinkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
@@ -31,7 +38,7 @@ function convertMarkdownLinks(text: string): React.ReactNode[] {
     parts.push(
       <Text
         key={match.index}
-        style={styles.link}
+        style={[styles.link, { color: linkColor, fontFamily }]}
         onPress={() => Linking.openURL(url)}
       >
         {linkText}
@@ -49,13 +56,23 @@ function convertMarkdownLinks(text: string): React.ReactNode[] {
   return parts.length > 0 ? parts : [text];
 }
 
-export default function ModernBannerFooter({ footerText, orgName }: ModernBannerFooterProps) {
-  const processedText = (footerText || '').replace(/\[Organization Name\]/g, orgName);
-  const content = convertMarkdownLinks(processedText);
+export default function ModernBannerFooter({
+  footerText,
+  orgName,
+  theme,
+  translate = (text: string) => text || '',
+}: ModernBannerFooterProps) {
+  const processedText = translate(footerText || '').replace(/\[Organization Name\]/g, orgName);
+  // Matches truKIT-NPM's ModernBannerFooter.jsx: link color follows the
+  // banner's primary/button color, not a fixed hardcoded hue.
+  const linkColor = theme?.button ?? '#9333ea';
+  const content = convertMarkdownLinks(processedText, linkColor, theme?.fontFamily);
 
   return (
     <View style={styles.container}>
-      <Text style={styles.text}>{content}</Text>
+      <Text style={[styles.text, { color: theme?.textMuted ?? '#6b7280', fontFamily: theme?.fontFamily }]}>
+        {content}
+      </Text>
     </View>
   );
 }
@@ -75,4 +92,3 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
   },
 });
-

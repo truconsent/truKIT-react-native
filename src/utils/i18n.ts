@@ -27,7 +27,6 @@ i18n
     interpolation: {
       escapeValue: false,
     },
-    compatibilityJSON: 'v3', // For React Native compatibility
   });
 
 export default i18n;

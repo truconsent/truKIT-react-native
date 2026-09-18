@@ -13,6 +13,14 @@
   "legal_entities": "சட்ட நிறுவனங்கள்",
   "tools": "கருவிகள்",
   "processing_activities": "செயலாக்க நடவடிக்கைகள்",
-  "data_processors": "தரவு செயலாக்கிகள்"
+  "data_processors": "தரவு செயலாக்கிகள்",
+  "informational": "தகவல்",
+  "consent": "ஒப்புதல்",
+  "necessary_group": "அவசியமானவை",
+  "optional_group": "விருப்பமானவை",
+  "profile_based_group": "சுயவிவரம் அடிப்படையிலானது",
+  "no_consent_purposes": "ஒப்புதல் நோக்கங்கள் இல்லை",
+  "no_purposes_available": "நோக்கங்கள் இல்லை",
+  "select_language": "மொழியைத் தேர்ந்தெடுக்கவும்"
 }
 

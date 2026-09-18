@@ -2,6 +2,7 @@
  * Color utility functions for theme support
  * Matches web implementation color transformations
  */
+import { Platform } from 'react-native';
 
 /**
  * Convert hex color to RGBA string
@@ -97,8 +98,97 @@ export const deriveThemeColors = (settings: {
   };
 };
 
+/** Resolved theme for the general Notice/consent banner (BannerUI and its
+ * children) — background, text, and button colors plus font family/size,
+ * all sourced from the banner's "Common Appearance" settings. Unlike
+ * {@link deriveThemeColors} (Rights Center, dark defaults), this uses the
+ * light-mode defaults truKIT-NPM's own `variables.css`/`TruConsentModal.jsx`
+ * fall back to when a field isn't configured. */
+export interface BannerTheme {
+  background: string;
+  text: string;
+  textMuted: string;
+  button: string;
+  buttonText: string;
+  border: string;
+  fontFamily?: string;
+  fontSize: number;
+}
+
+// Fonts the admin dashboard's "Font Type" dropdown commonly offers (web font
+// names like Garamond, Georgia, Verdana) are almost never actually present
+// on a phone — neither Android nor iOS ships them, and this SDK doesn't
+// bundle any font files, so `fontFamily: 'Garamond'` silently falls back to
+// the platform default with no warning. Rather than let the configured font
+// have zero visible effect, resolve it to the nearest font each OS *does*
+// ship: Android only resolves its 5 generic family keywords
+// (sans-serif/serif/monospace/casual/cursive) without a bundled font file;
+// iOS ships a larger set of real named fonts (Georgia, Courier New, ...)
+// that can be used directly. This is a best-effort visual approximation,
+// not the exact configured typeface — the only way to render the exact
+// font is for the consuming app to bundle that font file.
+const IOS_NAMED_FONTS = new Set([
+  'Georgia', 'Times New Roman', 'Courier New', 'Courier', 'Verdana', 'Trebuchet MS',
+  'Arial', 'Helvetica', 'Helvetica Neue', 'American Typewriter', 'Baskerville',
+  'Palatino', 'Optima', 'Didot', 'Futura', 'Avenir', 'Menlo',
+]);
+const SERIF_KEYWORDS = [
+  'garamond', 'georgia', 'times', 'serif', 'baskerville', 'palatino', 'cambria',
+  'constantia', 'didot', 'book antiqua', 'century', 'goudy', 'minion', 'caslon',
+];
+const MONOSPACE_KEYWORDS = ['courier', 'mono', 'consolas', 'menlo', 'monaco'];
+
+export const resolveFontFamily = (configured?: string | null): string | undefined => {
+  if (!configured) return undefined;
+  const lower = configured.toLowerCase();
+
+  if (Platform.OS === 'ios') {
+    if (IOS_NAMED_FONTS.has(configured)) return configured;
+    if (SERIF_KEYWORDS.some((k) => lower.includes(k))) return 'Georgia';
+    if (MONOSPACE_KEYWORDS.some((k) => lower.includes(k))) return 'Courier New';
+    return configured;
+  }
+
+  // Android: only the generic family keywords resolve without a bundled font.
+  if (SERIF_KEYWORDS.some((k) => lower.includes(k))) return 'serif';
+  if (MONOSPACE_KEYWORDS.some((k) => lower.includes(k))) return 'monospace';
+  if (lower === 'sans-serif' || lower === 'casual' || lower === 'cursive') return lower;
+  return 'sans-serif';
+};
+
+export const deriveBannerThemeColors = (settings: {
+  background_color?: string;
+  primary_text_color?: string;
+  secondary_text_color?: string;
+  primary_color?: string;
+  button_color?: string;
+  button_text_color?: string;
+  font_type?: string;
+  font_size?: string;
+} = {}): BannerTheme => {
+  const parsedFontSize = settings.font_size ? parseFloat(settings.font_size) : NaN;
+  return {
+    // The admin dashboard's "Background Color" field is actually
+    // `primary_color` (see AppearanceSettingsForm.tsx's
+    // `<ColorField id="primary_color" label="Background Color" .../>`) —
+    // there is no `background_color` column anywhere in the API. Prioritize
+    // `primary_color`; `background_color` is kept only as a defensive
+    // fallback in case a caller ever sends that key directly.
+    background: settings.primary_color || settings.background_color || '#ffffff',
+    text: settings.primary_text_color || '#111827',
+    textMuted: settings.secondary_text_color || '#6b7280',
+    button: settings.button_color || settings.primary_color || '#3b82f6',
+    buttonText: settings.button_text_color || '#ffffff',
+    border: '#e5e7eb',
+    fontFamily: resolveFontFamily(settings.font_type),
+    fontSize: Number.isFinite(parsedFontSize) && parsedFontSize > 0 ? parsedFontSize : 16,
+  };
+};
+
 export default {
   hexToRgba,
   parseRgba,
   deriveThemeColors,
+  deriveBannerThemeColors,
+  resolveFontFamily,
 };

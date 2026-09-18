@@ -72,7 +72,26 @@ export interface GrievanceTicket {
   client_user_id?: string;
 }
 
+/** Result of a successful non-SSO OTP verification. */
+export interface OtpVerifyResult {
+  accessToken: string;
+  dataPrincipalId: string;
+}
+
+/** A single message in a grievance ticket's chat thread. */
+export interface GrievanceMessage {
+  id: string;
+  sender: 'user' | 'agent' | 'system';
+  message: string;
+  created_at?: string;
+  attachment_url?: string;
+  attachment_name?: string;
+}
+
 export interface RightsCenterSettings {
+  /** 'sso' (default) or 'non_sso' (Rights Center authenticates the user via
+   * a phone + OTP flow before showing any tab content). */
+  access_mode?: 'sso' | 'non_sso';
   background_color?: string;
   primary_text_color?: string;
   secondary_text_color?: string;
@@ -121,6 +140,9 @@ class RightsCenterApi {
   private apiKey: string;
   private organizationId: string;
   private userId?: string;
+  // Bearer token acquired via the non-SSO OTP flow (verifyOtp). When set, it's
+  // sent as `Authorization: Bearer <authToken>` alongside the API key.
+  private authToken?: string;
   private requestTimeout: number = 15000; // 15-second timeout
 
   private isRightsRequestRouteMismatch(error: any): boolean {
@@ -128,12 +150,44 @@ class RightsCenterApi {
     return msg.includes('api error 404') && msg.includes('rights request not found');
   }
 
-  constructor(baseUrl: string, apiKey: string, organizationId: string, userId?: string) {
+  constructor(
+    baseUrl: string,
+    apiKey: string,
+    organizationId: string,
+    userId?: string,
+    authToken?: string
+  ) {
     this.baseUrl = (baseUrl || '').replace(/\/$/, '');
     this.apiRootUrl = this.baseUrl.replace(/\/banners\/?$/, '');
     this.apiKey = apiKey;
     this.organizationId = organizationId;
     this.userId = userId;
+    this.authToken = authToken;
+  }
+
+  /** Promotes a verified non-SSO OTP session's user id/token for all subsequent calls. */
+  setAuth(userId: string, authToken: string): void {
+    this.userId = userId;
+    this.authToken = authToken;
+  }
+
+  getUserId(): string | undefined {
+    return this.userId;
+  }
+
+  /** Builds the WebSocket URL for real-time grievance chat updates. Auth is
+   * passed as query params (`token`, `api_key`, `org_id`) rather than
+   * headers, matching the NPM SDK's approach (browsers can't set WS
+   * handshake headers) and the backend's expected auth shape. */
+  grievanceWebSocketUri(ticketId: string): string {
+    const httpUrl = new URL(this.apiRootUrl);
+    const scheme = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    const params = new URLSearchParams({
+      token: this.authToken || '',
+      api_key: this.apiKey || '',
+      org_id: this.organizationId || '',
+    });
+    return `${scheme}//${httpUrl.host}/ws/grievance/${encodeURIComponent(ticketId)}?${params.toString()}`;
   }
 
   private getHeaders(isSdkPath = false): Record<string, string> {
@@ -144,6 +198,9 @@ class RightsCenterApi {
     };
     if (this.userId) {
       headers['X-User-Id'] = this.userId;
+    }
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
     }
     // Backend OriginEnforcementMiddleware blocks /api/v1/internal/consent* and /api/v1/internal/banners*
     // unless the request looks like a browser (sec-fetch-site present OR mozilla/ in user-agent).
@@ -406,6 +463,82 @@ class RightsCenterApi {
         },
       }),
     });
+  }
+
+  // ─── Non-SSO OTP authentication ─────────────────────────────────────────────
+
+  async sendOtp(phone: string, countryCode: string, assetId?: string): Promise<void> {
+    await this.requestApi('/api/v1/internal/rights-center-access/send-otp', {
+      method: 'POST',
+      body: JSON.stringify({ assetId, phone, countryCode }),
+    });
+  }
+
+  /** Verifies the OTP and, on success, promotes this instance's userId/authToken
+   * (via {@link setAuth}) so subsequent calls act as the verified user. */
+  async verifyOtp(
+    phone: string,
+    countryCode: string,
+    otp: string,
+    assetId?: string
+  ): Promise<OtpVerifyResult> {
+    const payload = await this.requestApi<any>(
+      '/api/v1/internal/rights-center-access/verify-otp',
+      {
+        method: 'POST',
+        body: JSON.stringify({ assetId, phone, countryCode, otp }),
+      }
+    );
+    const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+    const result: OtpVerifyResult = {
+      accessToken: data?.accessToken || data?.access_token || '',
+      dataPrincipalId: data?.dataPrincipalId || data?.data_principal_id || '',
+    };
+    this.setAuth(result.dataPrincipalId, result.accessToken);
+    return result;
+  }
+
+  // ─── Grievance chat ──────────────────────────────────────────────────────────
+
+  async getGrievanceMessages(ticketId: string): Promise<GrievanceMessage[]> {
+    const payload = await this.requestApi<any>(
+      `/api/v1/internal/grievance/${encodeURIComponent(ticketId)}/messages`
+    );
+    const list = Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : [];
+    return list.map((m: any) => ({
+      id: String(m.id ?? m.message_id ?? ''),
+      sender: (m.sender as GrievanceMessage['sender']) || 'system',
+      message: m.message || '',
+      created_at: m.created_at,
+      attachment_url: m.attachment_url,
+      attachment_name: m.attachment_name,
+    }));
+  }
+
+  async sendGrievanceMessage(ticketId: string, message: string): Promise<GrievanceMessage> {
+    const payload = await this.requestApi<any>(
+      `/api/v1/internal/grievance/${encodeURIComponent(ticketId)}/messages`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ sender: 'user', message }),
+      }
+    );
+    const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+    if (data && typeof data === 'object') {
+      return {
+        id: String(data.id ?? data.message_id ?? `local-${Date.now()}`),
+        sender: (data.sender as GrievanceMessage['sender']) || 'user',
+        message: data.message || message,
+        created_at: data.created_at,
+      };
+    }
+    // Optimistic local echo if the backend returns no body.
+    return {
+      id: `local-${Date.now()}`,
+      sender: 'user',
+      message,
+      created_at: new Date().toISOString(),
+    };
   }
 
   // Consent endpoints
