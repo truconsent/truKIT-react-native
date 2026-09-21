@@ -4,6 +4,24 @@ React Native SDK for TruConsent consent banner. This package provides native mob
 
 ## Changelog
 
+### 0.1.6
+
+Three-way parity audit against `@truconsent/consent-notice` (the reference web SDK) — Consent Notice, Rights Center, and their underlying logic, not just appearance:
+
+- Fixed `ModernBannerActions`'s "Only Necessary" button disappearing once any optional purpose was toggled on, and its default colors not matching the reference (Reject All/Only Necessary are now always-visible, solid red/orange buttons; the third button dynamically submits "Accept All" or "Accept Selected" without ever changing its own label)
+- Fixed "I Consent"/Reject All/Only Necessary being clickable immediately, without the user having scrolled through every purpose card first — they're now gated on scroll position (skipped only when there's a single optional purpose), matching the reference exactly, including the "Please scroll to the bottom to enable actions" warning text
+- Fixed Legitimate Interest purposes (no toggle, no accept/decline concept) being counted as "optional purposes" in that same gating logic — a banner mixing Legitimate Interest + mandatory + exactly one real optional purpose could leave "I Consent" permanently disabled
+- Fixed the toggle switch rendering nothing at all for Legitimate Interest purposes now excluded consistently from every place that checks "any optional purpose accepted"
+- Fixed the Data Processors section splitting Legal Entities/Tools into two separately-labeled subsections instead of one flat combined list
+- Fixed the consent notice's disclaimer box being hardcoded blue regardless of the configured theme — now derived the same way the reference SDK's fixed light/dark presets are, based on whether the configured background is light or dark
+- Added the missing Grievance chat header Open/Resolved status pill (Rights Center)
+- Fixed the toggle switch thumb using the Primary Text Color instead of the Primary Button Text Color
+- Fixed the footer's inline links using the button color instead of the primary color
+- Fixed the purpose card's expiry label showing a fabricated "1 Year" default (and sometimes a raw UUID) instead of "Until withdrawn"
+- Fixed the H-Case mandatory-purpose-declined intercept firing for Legitimate Interest purposes, which have no accept/decline concept to intercept
+- Fixed Rights Center's Access/Delete request Cancel buttons (and Nominee edit form's Cancel) using a destructive red style — only the actual destructive action button should be red, not Cancel
+- Fixed the Grievance chat's non-user message bubble using a hardcoded light-gray background instead of the configured theme
+
 ### 0.1.5
 
 - Fixed "Common Appearance" theme colors (background, button, text) and font family not applying correctly to the consent notice

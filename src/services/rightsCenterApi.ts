@@ -48,6 +48,10 @@ export interface FlatPurpose {
   processingActivities: any[];
   type: 'Mandatory' | 'Optional';
   timestamp: number;
+  /** Legitimate Interest disclosure signal — mirrors truKIT-NPM's RightCenter.jsx:
+   * any consent log at all (timestamp > 0) for an LI purpose means the banner was
+   * rendered to the user, so the purpose was "shown", independent of accept/decline. */
+  shown_to_principal?: boolean;
 }
 
 export interface Nominee {
@@ -786,6 +790,7 @@ class RightsCenterApi {
           processingActivities: Array.isArray(p?.processing_activities) ? p.processing_activities : Array.isArray(p?.processingActivities) ? p.processingActivities : [],
           type: isMandatory ? 'Mandatory' : 'Optional',
           timestamp: 0,
+          shown_to_principal: false,
         });
       }
     }
@@ -794,11 +799,17 @@ class RightsCenterApi {
     for (const cp of userOverview) {
       const pcList = cp?.latest_consent?.purpose_consents || cp?.latestConsent?.purposeConsents || [];
       const logTimestamp = new Date(cp?.latest_consent?.timestamp || cp?.latestConsent?.timestamp || 0).getTime();
+      // Any consent log (notice_shown, approved, declined, etc.) means the banner was shown.
+      const bannerWasShown = logTimestamp > 0;
       for (const pc of pcList) {
         const pid = String(pc?.purpose_id ?? pc?.id ?? pc?.purposeId ?? '');
         if (!pid) continue;
         const existing = uniquePurposesMap.get(pid);
         if (!existing) continue;
+        // For Legitimate Interest: banner being shown = shown_to_principal = true,
+        // regardless of whether this particular log is newer than what we already have —
+        // any observed log at all is evidence the LI purpose was disclosed.
+        const shownToPrincipal = existing.shown_to_principal || (existing.isLegitimate && bannerWasShown);
         if (logTimestamp > existing.timestamp) {
           uniquePurposesMap.set(pid, {
             ...existing,
@@ -809,7 +820,10 @@ class RightsCenterApi {
             description: pc?.description || existing.description,
             name: pc?.name || pc?.title || existing.name,
             title: pc?.name || pc?.title || existing.title,
+            shown_to_principal: shownToPrincipal,
           });
+        } else if (shownToPrincipal !== existing.shown_to_principal) {
+          uniquePurposesMap.set(pid, { ...existing, shown_to_principal: shownToPrincipal });
         }
       }
     }

@@ -113,7 +113,30 @@ export interface BannerTheme {
   border: string;
   fontFamily?: string;
   fontSize: number;
+  /** Disclaimer box colors — truKIT-NPM's --banner-info-bg/border/text are
+   * fixed light/dark presets (variables.css), never admin-configurable and
+   * never derived from settings; there is no light/dark toggle prop in this
+   * SDK's public API to key off of the same way, so these are derived from
+   * whether the configured background is dark or light instead, picking
+   * whichever of NPM's two fixed presets actually contrasts. */
+  infoBg?: string;
+  infoBorder?: string;
+  infoText?: string;
 }
+
+/** Mirrors truKIT-NPM's TruCookieConsent.jsx _isDarkColor (itself mirroring
+ * apps/api/backend's sdk/router.py::_is_dark_color). */
+export const isDarkColor = (hex: string | null | undefined): boolean => {
+  if (!hex || typeof hex !== 'string') return false;
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  if (h.length !== 6) return false;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  if ([r, g, b].some(Number.isNaN)) return false;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5;
+};
 
 // Fonts the admin dashboard's "Font Type" dropdown commonly offers (web font
 // names like Garamond, Georgia, Verdana) are almost never actually present
@@ -167,6 +190,8 @@ export const deriveBannerThemeColors = (settings: {
   font_size?: string;
 } = {}): BannerTheme => {
   const parsedFontSize = settings.font_size ? parseFloat(settings.font_size) : NaN;
+  const background = settings.primary_color || settings.background_color || '#ffffff';
+  const dark = isDarkColor(background);
   return {
     // The admin dashboard's "Background Color" field is actually
     // `primary_color` (see AppearanceSettingsForm.tsx's
@@ -174,7 +199,7 @@ export const deriveBannerThemeColors = (settings: {
     // there is no `background_color` column anywhere in the API. Prioritize
     // `primary_color`; `background_color` is kept only as a defensive
     // fallback in case a caller ever sends that key directly.
-    background: settings.primary_color || settings.background_color || '#ffffff',
+    background,
     text: settings.primary_text_color || '#111827',
     textMuted: settings.secondary_text_color || '#6b7280',
     button: settings.button_color || settings.primary_color || '#3b82f6',
@@ -182,6 +207,10 @@ export const deriveBannerThemeColors = (settings: {
     border: '#e5e7eb',
     fontFamily: resolveFontFamily(settings.font_type),
     fontSize: Number.isFinite(parsedFontSize) && parsedFontSize > 0 ? parsedFontSize : 16,
+    // truKIT-NPM's variables.css fixed light/dark presets for the disclaimer box.
+    infoBg: dark ? '#0a0c10' : '#eff6ff',
+    infoBorder: dark ? '#1e293b' : '#bfdbfe',
+    infoText: dark ? '#60a5fa' : '#1e40af',
   };
 };
 

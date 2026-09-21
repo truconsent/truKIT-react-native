@@ -710,6 +710,7 @@ export default function NativeRightCenter({
 
   // Rights request handlers (web parity)
   const handleAccessRequest = async () => {
+    console.log(`[NativeRightCenter] createAccessRequest userId="${effectiveUserId}"`);
     try {
       await api.createAccessRequest(effectiveUserId, assetId);
       setAccessConfirmed(true);
@@ -724,6 +725,7 @@ export default function NativeRightCenter({
   };
 
   const handleDeleteRequest = async () => {
+    console.log(`[NativeRightCenter] createDeletionRequest userId="${effectiveUserId}"`);
     try {
       await api.createDeletionRequest(effectiveUserId, assetId);
       setDeleteConfirmed(true);
@@ -886,7 +888,7 @@ export default function NativeRightCenter({
               <Text
                 style={[
                   styles.tabText,
-                  { color: activeTab === tab ? theme.buttonText : theme.textPrimary },
+                  { color: activeTab === tab ? theme.buttonText : theme.textSecondary },
                   activeTab === tab && styles.tabTextActive,
                 ]}
               >
@@ -912,7 +914,7 @@ export default function NativeRightCenter({
               <Text
                 style={[
                   styles.tabText,
-                  { color: activeTab === tab ? theme.buttonText : theme.textPrimary },
+                  { color: activeTab === tab ? theme.buttonText : theme.textSecondary },
                   activeTab === tab && styles.tabTextActive,
                 ]}
               >
@@ -1271,13 +1273,15 @@ function ConsentTab({
             <Text style={styles.badgeLegitimate}>Legitimate Interest</Text>
           )}
         </View>
-        {!readOnly && (
+        {/* Legitimate Interest has no opt-in/opt-out concept — processing happens under that
+            legal basis regardless of user action, so there's nothing for a toggle to control. */}
+        {!readOnly && !p.isLegitimate && (
           <View style={styles.toggleSection}>
             <Switch
               value={p.consented === 'accepted'}
-              onValueChange={() => !p.isLegitimate && onToggle(p.id)}
-              disabled={p.isLegitimate}
-              trackColor={{ false: '#ccc', true: theme.button }}
+              onValueChange={() => onToggle(p.id)}
+              trackColor={{ false: theme.border, true: theme.button }}
+              thumbColor={theme.buttonText}
             />
           </View>
         )}
@@ -1299,19 +1303,23 @@ function ConsentTab({
         </Text>
       </View>
 
-      {/* Consented Status pill */}
+      {/* Status pill — matches truKIT-NPM's RightCenter.jsx: a Legitimate Interest purpose
+          shows "Shown:" (was the LI disclosure rendered to the user at all?), never
+          "Consented:" (there's no accept/decline decision to report for it). */}
       <View style={styles.statusRow}>
         <View style={styles.statusItem}>
-          <Text style={[styles.statusLabel, { color: theme.textSecondary }]}>Consented:</Text>
+          <Text style={[styles.statusLabel, { color: theme.textSecondary }]}>
+            {p.isLegitimate ? 'Shown:' : 'Consented:'}
+          </Text>
           <Text
             style={[
               styles.statusValue,
-              p.consented === 'accepted'
+              (p.isLegitimate ? p.shown_to_principal : p.consented === 'accepted')
                 ? { backgroundColor: theme.button, color: theme.buttonText }
                 : { backgroundColor: '#ef4444', color: '#ffffff' },
             ]}
           >
-            {p.consented === 'accepted' ? 'Yes' : 'No'}
+            {(p.isLegitimate ? p.shown_to_principal : p.consented === 'accepted') ? 'Yes' : 'No'}
           </Text>
         </View>
       </View>
@@ -1399,26 +1407,32 @@ function RightsTab({
 
       <Modal visible={showAccessModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { backgroundColor: theme.background }]}>
             {!accessConfirmed ? (
               <>
-                <Text style={styles.modalTitle}>Confirm Data Access Request</Text>
-                <Text style={styles.modalSubtitle}>
+                <Text style={[styles.modalTitle, { color: theme.textPrimary }]}>Confirm Data Access Request</Text>
+                <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>
                   Are you sure you want to request access to your personal data?
                 </Text>
                 <View style={styles.modalActions}>
-                  <TouchableOpacity style={styles.primaryButton} onPress={onAccessRequest}>
-                    <Text style={styles.primaryButtonText}>Confirm Access</Text>
+                  <TouchableOpacity style={[styles.primaryButton, { backgroundColor: theme.button }]} onPress={onAccessRequest}>
+                    <Text style={[styles.primaryButtonText, { color: theme.buttonText }]}>Confirm Access</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.secondaryButton} onPress={onCloseAccessModal}>
-                    <Text style={styles.secondaryButtonText}>Cancel</Text>
+                  {/* Cancel is not destructive — matches truKIT-NPM's rc-btn-secondary
+                      (neutral, themed); the danger-red style belongs only on the actual
+                      delete/confirm action, never on Cancel. */}
+                  <TouchableOpacity
+                    style={[styles.secondaryButton, { backgroundColor: theme.background, borderColor: theme.border, borderWidth: 1 }]}
+                    onPress={onCloseAccessModal}
+                  >
+                    <Text style={[styles.secondaryButtonText, { color: theme.textPrimary }]}>Cancel</Text>
                   </TouchableOpacity>
                 </View>
               </>
             ) : (
               <>
-                <Text style={styles.modalTitle}>Request Submitted</Text>
-                <Text style={styles.modalSubtitle}>
+                <Text style={[styles.modalTitle, { color: theme.textPrimary }]}>Request Submitted</Text>
+                <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>
                   Your data access request has been submitted successfully!
                 </Text>
               </>
@@ -1429,26 +1443,30 @@ function RightsTab({
 
       <Modal visible={showDeleteModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { backgroundColor: theme.background }]}>
             {!deleteConfirmed ? (
               <>
-                <Text style={styles.modalTitle}>Confirm Data Deletion</Text>
-                <Text style={styles.modalSubtitle}>
+                <Text style={[styles.modalTitle, { color: theme.textPrimary }]}>Confirm Data Deletion</Text>
+                <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>
                   Are you sure you want to request data deletion? This action cannot be undone.
                 </Text>
                 <View style={styles.modalActions}>
-                  <TouchableOpacity style={styles.dangerButton} onPress={onDeleteRequest}>
-                    <Text style={styles.dangerButtonText}>Confirm Deletion</Text>
+                  <TouchableOpacity style={[styles.primaryButton, { backgroundColor: theme.button }]} onPress={onDeleteRequest}>
+                    <Text style={[styles.primaryButtonText, { color: theme.buttonText }]}>Confirm </Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.secondaryButton} onPress={onCloseDeleteModal}>
-                    <Text style={styles.secondaryButtonText}>Cancel</Text>
+                  {/* Cancel is not destructive — matches truKIT-NPM's rc-btn-secondary. */}
+                  <TouchableOpacity
+                    style={[styles.secondaryButton, { backgroundColor: theme.background, borderColor: theme.border, borderWidth: 1 }]}
+                    onPress={onCloseDeleteModal}
+                  >
+                    <Text style={[styles.secondaryButtonText, { color: theme.textPrimary }]}>Cancel</Text>
                   </TouchableOpacity>
                 </View>
               </>
             ) : (
               <>
-                <Text style={styles.modalTitle}>Request Submitted</Text>
-                <Text style={styles.modalSubtitle}>
+                <Text style={[styles.modalTitle, { color: theme.textPrimary }]}>Request Submitted</Text>
+                <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>
                   Your data deletion request has been submitted successfully!
                 </Text>
               </>
@@ -1646,14 +1664,20 @@ function NomineeTab({ theme, settings, nominee, editing, nomineeForm, loading, e
             onChangeText={(text) => onFormChange({ ...nomineeForm, purpose_of_appointment: text })}
           />
           <View style={styles.formActions}>
-            <TouchableOpacity style={styles.primaryButton} onPress={onSubmit}>
-              <Text style={styles.primaryButtonText}>
+            <TouchableOpacity style={[styles.primaryButton, { backgroundColor: theme.button }]} onPress={onSubmit}>
+              <Text style={[styles.primaryButtonText, { color: theme.buttonText }]}>
                 {editing ? 'Update Nominee' : 'Send Verification Code'}
               </Text>
             </TouchableOpacity>
             {editing && (
-              <TouchableOpacity style={styles.secondaryButton} onPress={onCancel}>
-                <Text style={styles.secondaryButtonText}>Cancel</Text>
+              // Cancel (abort edit) is not destructive — matches truKIT-NPM's
+              // rc-btn-secondary; the Delete button on the saved-nominee card
+              // (a separate control) keeps the danger-red style, correctly.
+              <TouchableOpacity
+                style={[styles.secondaryButton, { backgroundColor: theme.background, borderColor: theme.border, borderWidth: 1 }]}
+                onPress={onCancel}
+              >
+                <Text style={[styles.secondaryButtonText, { color: theme.textPrimary }]}>Cancel</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -1662,6 +1686,11 @@ function NomineeTab({ theme, settings, nominee, editing, nomineeForm, loading, e
     </View>
   );
 }
+
+// Matches truKIT-NPM's RightCenter.jsx status-pill logic (`rc-ticket-status--
+// ${(status || 'open').toLowerCase()}`) — everything that isn't "resolved"
+// reads as "open".
+const isTicketResolved = (status?: string) => (status || 'open').toLowerCase() === 'resolved';
 
 function GrievanceThread({
   theme,
@@ -1690,6 +1719,18 @@ function GrievanceThread({
             {live ? 'Live' : 'Updates every 5s'}
           </Text>
         </View>
+        {/* Matches truKIT-NPM's RightCenter.jsx chat header status pill —
+         * previously missing entirely from this drawer. */}
+        <Text
+          style={[
+            chatStyles.statusPill,
+            isTicketResolved(ticket?.status)
+              ? { backgroundColor: theme.successBg, color: theme.successText }
+              : { backgroundColor: theme.infoBg, color: theme.button, borderWidth: 1, borderColor: theme.infoBorder },
+          ]}
+        >
+          {(ticket?.status || 'Open').toUpperCase()}
+        </Text>
       </View>
 
       {loading ? (
@@ -1709,10 +1750,13 @@ function GrievanceThread({
                 chatStyles.bubble,
                 m.sender === 'user'
                   ? { alignSelf: 'flex-end', backgroundColor: theme.button }
-                  : { alignSelf: 'flex-start', backgroundColor: '#e5e7eb' },
+                  // Matches truKIT-NPM's RightCenter.css: the admin/agent bubble is
+                  // themed (background/border/text), not a hardcoded light gray —
+                  // which looks jarring against a dark Rights Center theme.
+                  : { alignSelf: 'flex-start', backgroundColor: theme.background, borderWidth: 1, borderColor: theme.border },
               ]}
             >
-              <Text style={{ color: m.sender === 'user' ? theme.buttonText : '#111827' }}>
+              <Text style={{ color: m.sender === 'user' ? theme.buttonText : theme.textPrimary }}>
                 {m.message}
               </Text>
             </View>
@@ -1755,6 +1799,14 @@ const chatStyles = StyleSheet.create({
   headerTitle: {
     fontSize: 15,
     fontWeight: '600',
+  },
+  statusPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    fontSize: 11,
+    fontWeight: '500',
+    textTransform: 'uppercase',
   },
   bubble: {
     maxWidth: '75%',
@@ -1875,7 +1927,14 @@ function GrievanceTab({ theme, tickets, loading, error, showForm, form, onFormCh
               >
                 <View style={styles.ticketHeader}>
                   <Text style={[styles.ticketSubject, { color: theme.textPrimary }]}>{ticket.subject}</Text>
-                  <Text style={[styles.ticketStatus, { backgroundColor: theme.successBg, color: theme.successText }]}>
+                  <Text
+                    style={[
+                      styles.ticketStatus,
+                      isTicketResolved(ticket.status)
+                        ? { backgroundColor: theme.successBg, color: theme.successText }
+                        : { backgroundColor: theme.infoBg, color: theme.button, borderWidth: 1, borderColor: theme.infoBorder },
+                    ]}
+                  >
                     {(ticket.status || 'Open').toUpperCase()}
                   </Text>
                 </View>

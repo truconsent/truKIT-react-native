@@ -3,15 +3,19 @@
  */
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, useWindowDimensions } from 'react-native';
-import { useTranslation } from 'react-i18next';
 import { Purpose } from '../core/types';
-import { hasOptionalAccepted, hasMandatoryPurposes } from '../core/ConsentManager';
+import { hasOptionalAccepted } from '../core/ConsentManager';
 import { BannerTheme } from '../utils/ColorUtils';
 
 export interface ModernBannerActionsProps {
   onRejectAll: () => void;
   onConsentAll: () => void;
   onAcceptSelected: () => void;
+  /** "Only Necessary" — accept mandatory, decline optional. Matches
+   * truKIT-NPM's ModernBannerActions.jsx, where this is always a distinct,
+   * persistently-rendered third handler, never swapped in for
+   * `onAcceptSelected`. */
+  onAcceptMandatory: () => void;
   purposes: Purpose[];
   actionButtonText?: string;
   primaryColor?: string;
@@ -22,6 +26,17 @@ export interface ModernBannerActionsProps {
   /** Per-notice "Global Settings" overrides for the Only Necessary button. */
   onlyNecessaryColor?: string;
   onlyNecessaryText?: string;
+  /** True once the user has toggled any purpose this session — matches
+   * truKIT-NPM's `hasUserInteracted`, which (together with
+   * `anyOptionalAccepted`) decides whether the dynamic third button submits
+   * via `onConsentAll` or `onAcceptSelected`. */
+  hasUserInteracted?: boolean;
+  /** Matches truKIT-NPM's `isBottomReached` — whether the user has scrolled
+   * through every purpose. Defaults to `true` (no gating) for callers that
+   * don't track scroll position, matching truKIT-NPM's simpler templates
+   * (CompactListUI/SplitPaneUI/InlineSingleRowUI), which always pass
+   * `isBottomReached={true}`. */
+  isBottomReached?: boolean;
   /** Translates dynamic (server-supplied) text via the banner's translation
    * snapshot. Falls back to the static i18next bundle, then the original
    * text, if the snapshot has no match — matches truKIT-NPM's
@@ -34,6 +49,7 @@ export default function ModernBannerActions({
   onRejectAll,
   onConsentAll,
   onAcceptSelected,
+  onAcceptMandatory,
   purposes = [],
   actionButtonText,
   primaryColor = '#3b82f6',
@@ -42,108 +58,127 @@ export default function ModernBannerActions({
   rejectAllText,
   onlyNecessaryColor,
   onlyNecessaryText,
+  hasUserInteracted = false,
+  isBottomReached = true,
   translate,
 }: ModernBannerActionsProps) {
-  const { t } = useTranslation();
   const { width: screenWidth } = useWindowDimensions();
-  const isMobile = screenWidth < 600;
   const isSmallMobile = screenWidth < 380;
 
   const anyOptionalAccepted = hasOptionalAccepted(purposes);
-  const hasMandatory = hasMandatoryPurposes(purposes);
+  // Legitimate Interest purposes are never toggleable (no switch is even
+  // rendered for them — see ModernPurposeCard.tsx) and can never be
+  // "accepted" by the user, so they must not count toward "optional
+  // purposes exist" — otherwise a banner with only Legitimate Interest +
+  // mandatory purposes (no real optional consent purpose at all) would
+  // permanently disable "I Consent", since anyOptionalAccepted can never
+  // become true. Matches hasOptionalAccepted's own filter.
+  const optionalPurposes = purposes.filter((p) => !p.is_mandatory && !p.is_legitimate);
+  const hasOptional = optionalPurposes.length > 0;
+  // Matches truKIT-NPM's ModernBannerActions.jsx exactly: scrolling isn't
+  // required when there's only a single optional purpose to review.
+  const isSinglePurpose = optionalPurposes.length === 1;
+  const scrollRequired = !isSinglePurpose;
+  const showScrollWarning = scrollRequired && !isBottomReached;
+  const isActionsEnabled = !scrollRequired || isBottomReached;
 
-  // For static UI microcopy: prefer the server-driven snapshot (covers every
-  // language the admin actually configured), falling back to the static
-  // i18next bundle (only covers en/hi/ta) so those two languages keep
-  // working even with no snapshot.
-  const tr = (text: string, i18nKey?: string): string => {
-    const snapshotResult = translate ? translate(text) : text;
-    if (snapshotResult !== text) return snapshotResult;
-    return i18nKey ? t(i18nKey) : text;
+  // Admin-configurable button text (action_button_text/reject_all_text/
+  // only_necessary_text) must never be silently swapped for a *different*
+  // generic i18n-bundle string when there's no snapshot translation for it —
+  // matches truKIT-NPM's ModernBannerActions.jsx, which is just
+  // `translate(customText || defaultLiteral)`: snapshot-translate if there's
+  // a match, otherwise show the literal (including the admin's actual
+  // configured override) as-is.
+  const trConfigurable = (customText: string | undefined, defaultText: string): string => {
+    const text = customText || defaultText;
+    return translate ? translate(text) : text;
   };
 
-  // Only Necessary state has a configurable label override (only_necessary_text);
-  // the "Accept Selected" state has no equivalent field in truKIT-NPM, so it
-  // keeps its i18n default.
-  const dynamicButtonLabel = anyOptionalAccepted
-    ? tr('Accept Selected', 'accept_selected')
-    : tr(onlyNecessaryText || 'Only Necessary', 'accept_only_necessary');
-
-  const isDisabled = !anyOptionalAccepted && !hasMandatory;
+  // Matches truKIT-NPM's ModernBannerActions.jsx exactly: the third button's
+  // *label* never changes ("I Consent"/actionButtonText, always) — only its
+  // handler switches, once the user has an optional purpose accepted or has
+  // interacted with a toggle this session.
+  const isIConsentEnabled = isActionsEnabled && (hasOptional ? anyOptionalAccepted : true);
   const fontFamily = theme?.fontFamily;
+  const buttonColor = theme?.button ?? primaryColor;
   const buttonTextColor = theme?.buttonText ?? 'white';
+
+  const handleThirdButtonPress = () => {
+    if (anyOptionalAccepted || hasUserInteracted) {
+      onAcceptSelected();
+    } else {
+      onConsentAll();
+    }
+  };
 
   const rejectButton = (
     <TouchableOpacity
       style={[
         styles.rejectButton,
         isSmallMobile ? styles.buttonFullWidth : styles.buttonFlex,
-        rejectAllColor
-          ? { backgroundColor: rejectAllColor, borderColor: rejectAllColor }
-          : null,
+        { backgroundColor: rejectAllColor || '#dc2626', opacity: isActionsEnabled ? 1 : 0.5 },
       ]}
       onPress={onRejectAll}
+      disabled={!isActionsEnabled}
     >
-      <Text
-        style={[
-          styles.rejectButtonText,
-          { fontFamily },
-          rejectAllColor ? { color: 'white' } : null,
-        ]}
-        numberOfLines={1}
-      >
-        {tr(rejectAllText || 'Reject All', 'reject_all')}
+      <Text style={[styles.rejectButtonText, { fontFamily }]} numberOfLines={1}>
+        {trConfigurable(rejectAllText, 'Reject All')}
       </Text>
     </TouchableOpacity>
   );
 
-  const acceptSelectedButton = (
+  // Persistent — matches truKIT-NPM, which never swaps this button out once
+  // an optional purpose is toggled on (unlike the old dual-mode handler this
+  // replaces).
+  const onlyNecessaryButton = (
     <TouchableOpacity
       style={[
-        styles.acceptSelectedButton,
+        styles.onlyNecessaryButton,
         isSmallMobile ? styles.buttonFullWidth : styles.buttonFlex,
-        onlyNecessaryColor ? { backgroundColor: onlyNecessaryColor } : null,
-        isDisabled && styles.disabledButton,
+        { backgroundColor: onlyNecessaryColor || '#f97316', opacity: isActionsEnabled ? 1 : 0.5 },
       ]}
-      onPress={onAcceptSelected}
-      disabled={isDisabled}
+      onPress={onAcceptMandatory}
+      disabled={!isActionsEnabled}
     >
-      <Text
-        style={[
-          styles.acceptSelectedButtonText,
-          { fontFamily },
-          isDisabled && styles.disabledButtonText,
-        ]}
-        numberOfLines={2}
-      >
-        {dynamicButtonLabel}
+      <Text style={[styles.onlyNecessaryButtonText, { fontFamily }]} numberOfLines={2}>
+        {trConfigurable(onlyNecessaryText, 'Only Necessary')}
       </Text>
     </TouchableOpacity>
   );
 
   return (
     <View style={[styles.container, { backgroundColor: theme?.background ?? '#f9fafb' }]}>
-      {/* Primary action (Accept All) is always full-width on top — mirrors
-       * truKIT-flutter-sdk's ModernBannerActions layout. On very narrow
-       * phones the two secondary buttons stack full-width too, instead of
-       * wrapping into an uneven row. */}
+      {showScrollWarning && (
+        <Text style={styles.scrollWarning}>
+          {trConfigurable(undefined, 'Please scroll to the bottom to enable actions')}
+        </Text>
+      )}
       <TouchableOpacity
-        style={[styles.primaryButton, { backgroundColor: primaryColor }]}
-        onPress={onConsentAll}
+        style={[
+          styles.primaryButton,
+          { backgroundColor: isIConsentEnabled ? buttonColor : (theme?.border ?? '#9ca3af') },
+        ]}
+        onPress={handleThirdButtonPress}
+        disabled={!isIConsentEnabled}
       >
         <Text style={[styles.primaryButtonText, { color: buttonTextColor, fontFamily }]} numberOfLines={1}>
-          {tr(actionButtonText || 'Accept All', 'accept_all')}
+          {trConfigurable(actionButtonText, 'I Consent')}
         </Text>
       </TouchableOpacity>
       <View style={isSmallMobile ? styles.secondaryColumn : styles.secondaryRow}>
         {rejectButton}
-        {acceptSelectedButton}
+        {onlyNecessaryButton}
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  scrollWarning: {
+    fontSize: 11,
+    textAlign: 'center',
+    color: '#9ca3af',
+  },
   container: {
     backgroundColor: '#f9fafb',
     paddingHorizontal: 16,
@@ -177,34 +212,24 @@ const styles = StyleSheet.create({
   rejectButton: {
     paddingVertical: 12,
     paddingHorizontal: 12,
-    backgroundColor: 'white',
-    borderWidth: 1,
-    borderColor: '#fb923c',
     borderRadius: 8,
     alignItems: 'center',
   },
   rejectButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#ea580c',
+    color: 'white',
   },
-  acceptSelectedButton: {
+  onlyNecessaryButton: {
     paddingVertical: 12,
     paddingHorizontal: 12,
-    backgroundColor: '#16a34a',
     borderRadius: 8,
     alignItems: 'center',
   },
-  disabledButton: {
-    backgroundColor: '#9ca3af',
-  },
-  acceptSelectedButtonText: {
+  onlyNecessaryButtonText: {
     fontSize: 14,
     fontWeight: '600',
     color: 'white',
     textAlign: 'center',
-  },
-  disabledButtonText: {
-    color: '#f3f4f6',
   },
 });

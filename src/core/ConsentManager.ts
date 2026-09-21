@@ -225,8 +225,11 @@ export function getDeclinedPurposes(purposes: Purpose[]): Purpose[] {
  * Check if any optional purposes are accepted
  */
 export function hasOptionalAccepted(purposes: Purpose[]): boolean {
+  // Legitimate Interest purposes are never toggleable and can never be
+  // "accepted" by the user — matches truKIT-flutter-sdk's
+  // consent_manager.dart hasOptionalAccepted, which excludes them too.
   return purposes
-    .filter((p) => !p.is_mandatory)
+    .filter((p) => !p.is_mandatory && !p.is_legitimate)
     .some((p) => p.consented === 'accepted' || (p.consented as any) === true);
 }
 
@@ -234,5 +237,5 @@ export function hasOptionalAccepted(purposes: Purpose[]): boolean {
  * Check if there are any mandatory purposes
  */
 export function hasMandatoryPurposes(purposes: Purpose[]): boolean {
-  return purposes.some((p) => p.is_mandatory);
+  return purposes.some((p) => p.is_mandatory && !p.is_legitimate);
 }

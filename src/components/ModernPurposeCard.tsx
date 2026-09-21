@@ -56,7 +56,14 @@ export default function ModernPurposeCard({
   const [openSection, setOpenSection] = useState<string | null>(null);
   const isMandatory = purpose.is_mandatory;
   const isAccepted = purpose.consented === 'accepted' || (purpose.consented as any) === true;
-  const expiryLabel = purpose.expiry_label || purpose.expiry_period || '1 Year';
+  // Matches truKIT-NPM's ModernPurposeCard.jsx / truKIT-flutter-sdk's
+  // _expiryText: default to "Until withdrawn" (not a fabricated "1 Year"),
+  // and filter out UUID-shaped values (internal references to another
+  // purpose, not a human-readable duration) before ever displaying them.
+  const isUUID = (val: string) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+  const rawExpiry = purpose.expiry_label || purpose.expiry_period;
+  const expiryLabel = !rawExpiry || isUUID(rawExpiry) ? 'Until withdrawn' : rawExpiry;
 
   const localize = (text: string): string => {
     const snapshotResult = translate ? translate(text) : text;
@@ -81,8 +88,10 @@ export default function ModernPurposeCard({
 
   const dataElements = purpose.data_elements || [];
   const processingActivities = purpose.processing_activities || [];
-  const legalEntities = purpose.legal_entities || [];
-  const tools = purpose.tools || [];
+  // Matches truKIT-NPM's ModernPurposeCard.jsx: legal entities and tools are
+  // combined into a single flat "Data Processors" list, not split into two
+  // labeled subsections.
+  const dataProcessors = [...(purpose.legal_entities || []), ...(purpose.tools || [])];
 
   const cardBg = theme?.background ?? '#fff';
   const textColor = theme?.text ?? '#111827';
@@ -109,22 +118,27 @@ export default function ModernPurposeCard({
           </Text>
         </View>
         <View style={styles.actions}>
-          <View style={styles.expiryBadge}>
-            <Text style={[styles.expiryText, { fontFamily }]}>{t('expiry_type', { expiry: expiryLabel })}</Text>
+          <View style={[styles.expiryBadge, { backgroundColor: cardBg, borderColor, borderWidth: 1 }]}>
+            <Text style={[styles.expiryText, { color: textColor, fontFamily }]}>{t('expiry_type', { expiry: expiryLabel })}</Text>
           </View>
-          <View style={styles.switchContainer}>
-            <Text style={[styles.switchLabel, { fontFamily }, isAccepted && styles.switchLabelActive]}>
-              {tr('Accept', 'accept')}
-            </Text>
-            <View style={{ width: 8 }} />
-            <Switch
-              value={isAccepted}
-              onValueChange={(value) => onToggle && onToggle(purpose.id, value ? 'accepted' : 'declined')}
-              disabled={!onToggle}
-              trackColor={{ false: '#d1d5db', true: theme?.button ?? '#3b82f6' }}
-              thumbColor={isAccepted ? '#fff' : '#f4f3f4'}
-            />
-          </View>
+          {/* Matches truKIT-NPM's ModernPurposeCard.jsx: a Legitimate Interest
+              purpose has no accept/decline concept, so nothing renders here at
+              all — not even a disabled switch. */}
+          {!purpose.isLegitimate && (
+            <View style={styles.switchContainer}>
+              <Text style={[styles.switchLabel, { fontFamily }, isAccepted && styles.switchLabelActive]}>
+                {tr('Accept', 'accept')}
+              </Text>
+              <View style={{ width: 8 }} />
+              <Switch
+                value={isAccepted}
+                onValueChange={(value) => onToggle && onToggle(purpose.id, value ? 'accepted' : 'declined')}
+                disabled={!onToggle}
+                trackColor={{ false: theme?.border ?? '#d1d5db', true: theme?.button ?? '#3b82f6' }}
+                thumbColor={theme?.buttonText ?? '#fff'}
+              />
+            </View>
+          )}
         </View>
       </View>
 
@@ -139,63 +153,15 @@ export default function ModernPurposeCard({
         />
       )}
 
-      {banner?.show_processors !== false && (legalEntities.length > 0 || tools.length > 0) && (
-        <View style={[styles.section, { borderTopColor: borderColor }]}>
-          <TouchableOpacity
-            style={styles.sectionHeader}
-            onPress={() => handleToggleSection('data_processors')}
-          >
-            <Text style={[styles.sectionTitle, { color: mutedColor, fontFamily }]}>
-              {tr('Data Processors', 'data_processors')}
-            </Text>
-            <Text style={[styles.chevron, { color: mutedColor }]}>
-              {openSection === 'data_processors' ? '▼' : '▶'}
-            </Text>
-          </TouchableOpacity>
-          {openSection === 'data_processors' && (
-            <View style={styles.sectionContent}>
-              {legalEntities.length > 0 && (
-                <View style={styles.subsection}>
-                  <Text style={[styles.subsectionTitle, { color: mutedColor, fontFamily }]}>
-                    {tr('Legal Entities', 'legal_entities')} ({legalEntities.length})
-                  </Text>
-                  <View style={styles.pillsContainer}>
-                    {legalEntities.map((item) => (
-                      <View key={item.id} style={[styles.pill, { backgroundColor: cardBg, borderColor }]}>
-                        <Text style={[styles.pillText, { color: textColor, fontFamily }]}>
-                          {localize(item.name)}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                </View>
-              )}
-              {tools.length > 0 && (
-                <View style={styles.subsection}>
-                  <Text style={[styles.subsectionTitle, { color: mutedColor, fontFamily }]}>
-                    {tr('Tools', 'tools')} ({tools.length})
-                  </Text>
-                  <View style={styles.pillsContainer}>
-                    {tools.map((item, index) => (
-                      <View
-                        key={item.id}
-                        style={[
-                          styles.pill,
-                          { backgroundColor: cardBg, borderColor },
-                          index > 0 && { marginLeft: 8, marginTop: 8 },
-                        ]}
-                      >
-                        <Text style={[styles.pillText, { color: textColor, fontFamily }]}>
-                          {localize(item.name)}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                </View>
-              )}
-            </View>
-          )}
-        </View>
+      {banner?.show_processors !== false && dataProcessors.length > 0 && (
+        <CollapsibleDataSection
+          title={tr('Data Processors', 'data_processors')}
+          items={dataProcessors}
+          isOpen={openSection === 'data_processors'}
+          onToggle={() => handleToggleSection('data_processors')}
+          translate={translate}
+          theme={theme}
+        />
       )}
 
       {processingActivities.length > 0 && (

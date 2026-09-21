@@ -22,6 +22,8 @@ export interface CompactListUIProps {
   onRejectAll: () => void;
   onConsentAll: () => void;
   onAcceptSelected: () => void;
+  onAcceptMandatory: () => void;
+  hasUserInteracted?: boolean;
   primaryColor?: string;
 }
 
@@ -91,6 +93,8 @@ export default function CompactListUI({
   onRejectAll,
   onConsentAll,
   onAcceptSelected,
+  onAcceptMandatory,
+  hasUserInteracted = false,
   primaryColor,
 }: CompactListUIProps) {
   const settings = banner?.banner_settings || ({} as any);
@@ -118,6 +122,8 @@ export default function CompactListUI({
           onRejectAll={onRejectAll}
           onConsentAll={onConsentAll}
           onAcceptSelected={onAcceptSelected}
+          onAcceptMandatory={onAcceptMandatory}
+          hasUserInteracted={hasUserInteracted}
           purposes={banner?.purposes || []}
           actionButtonText={actionButtonText}
           primaryColor={settings.primary_color || primaryColor}

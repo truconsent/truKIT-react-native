@@ -63,9 +63,11 @@ export default function ModernBannerFooter({
   translate = (text: string) => text || '',
 }: ModernBannerFooterProps) {
   const processedText = translate(footerText || '').replace(/\[Organization Name\]/g, orgName);
-  // Matches truKIT-NPM's ModernBannerFooter.jsx: link color follows the
-  // banner's primary/button color, not a fixed hardcoded hue.
-  const linkColor = theme?.button ?? '#9333ea';
+  // Matches truKIT-NPM's ModernBannerFooter.jsx exactly: link color is
+  // var(--banner-primary-color) (settings.primaryColor) — never buttonColor,
+  // even when a distinct Button Color is configured. theme.background is
+  // primaryColor here (see deriveBannerThemeColors's mapping), not theme.button.
+  const linkColor = theme?.background ?? '#9333ea';
   const content = convertMarkdownLinks(processedText, linkColor, theme?.fontFamily);
 
   return (

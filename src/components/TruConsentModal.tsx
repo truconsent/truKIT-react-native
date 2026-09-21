@@ -59,6 +59,40 @@ export default function TruConsentModal(props: TruConsentConfig) {
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedLanguage, setSelectedLanguage] = useState('en');
+  // Matches truKIT-NPM's `hasUserInteracted` — set once the user toggles any
+  // purpose this session, so ModernBannerActions's dynamic third button
+  // switches from "Accept All" to "Accept Selected" semantics even if the
+  // toggle ends up leaving zero optional purposes accepted.
+  const [hasUserInteracted, setHasUserInteracted] = useState(false);
+  // Matches truKIT-NPM's BannerUI.jsx `isBottomReached` — the user must
+  // scroll through every purpose before "I Consent" (and Reject All/Only
+  // Necessary) become clickable. Tracked on the outer ScrollView that wraps
+  // the whole banner (header/purposes/footer/actions), since that's the
+  // scrollable region in this SDK's layout — reaching its bottom means every
+  // purpose card has been scrolled past.
+  const [isBottomReached, setIsBottomReached] = useState(false);
+  const [scrollViewportHeight, setScrollViewportHeight] = useState(0);
+  const [scrollContentHeight, setScrollContentHeight] = useState(0);
+
+  useEffect(() => {
+    if (
+      scrollViewportHeight > 0 &&
+      scrollContentHeight > 0 &&
+      scrollContentHeight <= scrollViewportHeight + 5
+    ) {
+      setIsBottomReached(true);
+    }
+  }, [scrollViewportHeight, scrollContentHeight]);
+
+  const handleBannerScroll = (e: {
+    nativeEvent: { contentOffset: { y: number }; contentSize: { height: number }; layoutMeasurement: { height: number } };
+  }) => {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    // 5px threshold for "bottom" — matches truKIT-NPM's BannerUI.jsx exactly.
+    if (contentSize.height - contentOffset.y <= layoutMeasurement.height + 5) {
+      setIsBottomReached(true);
+    }
+  };
 
   // Session & performance tracking
   const [sessionId] = useState(
@@ -142,6 +176,26 @@ export default function TruConsentModal(props: TruConsentConfig) {
   const consentPurposes = uiState.consentPurposes;
 
   const { purposes, updatePurpose, setPurposes } = useConsent(consentPurposes as Purpose[]);
+
+  const handleChangePurpose = (purposeId: string, status: 'accepted' | 'declined') => {
+    setHasUserInteracted(true);
+    updatePurpose(purposeId, status);
+  };
+
+  // BannerUI (the tabbed/normal template) takes a `uiState` prop and prefers
+  // its groupings over `banner.purposes` — the static `uiState` above (seeded
+  // once from the original banner fetch) never reflects a toggle, since
+  // `updatePurpose` only updates the separate `purposes` state, not this
+  // memo's source. Recomputing groupings from the live `purposes` state is
+  // what makes a toggle actually show as flipped instead of silently updating
+  // state nothing on screen reads from. `bannerCase`/`noticeOnly` etc. are
+  // stable across a toggle (they depend on is_mandatory/isLegitimate, not
+  // consented), so recomputing this on every toggle is cheap and safe.
+  const liveUiState: UIState = useMemo(
+    () => deriveUIState(purposes as NormalizedPurpose[]),
+    [purposes]
+  );
+
   const syncedPurposesKeyRef = useRef('');
 
   // Update purposes when banner loads
@@ -366,9 +420,13 @@ export default function TruConsentModal(props: TruConsentConfig) {
 
   // ---- H-Case intercept ----
   const checkHCaseIntercept = (purposesList: Purpose[]): boolean => {
-    // Returns true if any mandatory consent purpose is declined
+    // Returns true if any mandatory consent (not Legitimate Interest) purpose
+    // is declined — matches truKIT-NPM's useConsentEngine.js (legalBasis ===
+    // 'consent') and truKIT-flutter-sdk's consent_manager.dart (!isLegitimate).
+    // A mandatory LI purpose has no accept/decline concept, so it can never
+    // be "declined" in the sense this intercept is meant to catch.
     return purposesList.some(
-      (p) => p.is_mandatory && p.consented === 'declined'
+      (p) => p.is_mandatory && !p.isLegitimate && p.consented === 'declined'
     );
   };
 
@@ -648,6 +706,10 @@ export default function TruConsentModal(props: TruConsentConfig) {
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={true}
                 bounces={false}
+                onScroll={handleBannerScroll}
+                scrollEventThrottle={16}
+                onLayout={(e) => setScrollViewportHeight(e.nativeEvent.layout.height)}
+                onContentSizeChange={(_w, h) => setScrollContentHeight(h)}
               >
                 {displayError && (
                   <View style={styles.errorContainer}>
@@ -714,10 +776,12 @@ export default function TruConsentModal(props: TruConsentConfig) {
                         banner={{ ...banner, purposes: purposes as Purpose[] }}
                         companyName={resolvedCompanyName}
                         logoUrl={resolvedLogoUrl}
-                        onChangePurpose={updatePurpose}
+                        onChangePurpose={handleChangePurpose}
                         onRejectAll={handleRejectAll}
                         onConsentAll={handleConsentAll}
                         onAcceptSelected={handleAcceptSelected}
+                        onAcceptMandatory={handleAcceptMandatory}
+                        hasUserInteracted={hasUserInteracted}
                         primaryColor={primaryColor}
                       />
                     ) : resolvedTemplateKey === 'general_split_pane' ? (
@@ -725,10 +789,12 @@ export default function TruConsentModal(props: TruConsentConfig) {
                         banner={{ ...banner, purposes: purposes as Purpose[] }}
                         companyName={resolvedCompanyName}
                         logoUrl={resolvedLogoUrl}
-                        onChangePurpose={updatePurpose}
+                        onChangePurpose={handleChangePurpose}
                         onRejectAll={handleRejectAll}
                         onConsentAll={handleConsentAll}
                         onAcceptSelected={handleAcceptSelected}
+                        onAcceptMandatory={handleAcceptMandatory}
+                        hasUserInteracted={hasUserInteracted}
                         primaryColor={primaryColor}
                       />
                     ) : resolvedTemplateKey === 'inline_single_row' ? (
@@ -736,10 +802,12 @@ export default function TruConsentModal(props: TruConsentConfig) {
                         banner={{ ...banner, purposes: purposes as Purpose[] }}
                         companyName={resolvedCompanyName}
                         logoUrl={resolvedLogoUrl}
-                        onChangePurpose={updatePurpose}
+                        onChangePurpose={handleChangePurpose}
                         onRejectAll={handleRejectAll}
                         onConsentAll={handleConsentAll}
                         onAcceptSelected={handleAcceptSelected}
+                        onAcceptMandatory={handleAcceptMandatory}
+                        hasUserInteracted={hasUserInteracted}
                         primaryColor={primaryColor}
                       />
                     ) : (
@@ -753,11 +821,14 @@ export default function TruConsentModal(props: TruConsentConfig) {
                         availableLanguages={availableLanguages}
                         languageLabels={languageLabels}
                         onLanguageChange={setSelectedLanguage}
-                        onChangePurpose={updatePurpose}
+                        onChangePurpose={handleChangePurpose}
                         onRejectAll={handleRejectAll}
                         onConsentAll={handleConsentAll}
                         onAcceptSelected={handleAcceptSelected}
-                        uiState={uiState}
+                        onAcceptMandatory={handleAcceptMandatory}
+                        hasUserInteracted={hasUserInteracted}
+                        isBottomReached={isBottomReached}
+                        uiState={liveUiState}
                         primaryColor={primaryColor}
                         onAcknowledgeNotice={handleAcknowledgeNotice}
                       />

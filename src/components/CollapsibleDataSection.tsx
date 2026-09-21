@@ -4,7 +4,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { DataElement, ProcessingActivity } from '../core/types';
+import { DataElement, ProcessingActivity, LegalEntity, Tool } from '../core/types';
 import { BannerTheme } from '../utils/ColorUtils';
 
 const dynamicTranslations: Record<string, Record<string, string>> = {
@@ -39,7 +39,7 @@ const translateDynamic = (text: string, language: string): string => {
 
 export interface CollapsibleDataSectionProps {
   title: string;
-  items: (DataElement | ProcessingActivity)[];
+  items: (DataElement | ProcessingActivity | LegalEntity | Tool)[];
   isOpen: boolean;
   onToggle: () => void;
   /** Translates dynamic (server-supplied) text via the banner's translation

@@ -21,6 +21,8 @@ export interface SplitPaneUIProps {
   onRejectAll: () => void;
   onConsentAll: () => void;
   onAcceptSelected: () => void;
+  onAcceptMandatory: () => void;
+  hasUserInteracted?: boolean;
   primaryColor?: string;
 }
 
@@ -32,6 +34,8 @@ export default function SplitPaneUI({
   onRejectAll,
   onConsentAll,
   onAcceptSelected,
+  onAcceptMandatory,
+  hasUserInteracted = false,
   primaryColor,
 }: SplitPaneUIProps) {
   const purposes = banner?.purposes || [];
@@ -103,6 +107,8 @@ export default function SplitPaneUI({
           onRejectAll={onRejectAll}
           onConsentAll={onConsentAll}
           onAcceptSelected={onAcceptSelected}
+          onAcceptMandatory={onAcceptMandatory}
+          hasUserInteracted={hasUserInteracted}
           purposes={purposes}
           actionButtonText={actionButtonText}
           primaryColor={settings.primary_color || primaryColor}

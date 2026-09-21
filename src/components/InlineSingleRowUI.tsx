@@ -22,6 +22,8 @@ export interface InlineSingleRowUIProps {
   onRejectAll: () => void;
   onConsentAll: () => void;
   onAcceptSelected: () => void;
+  onAcceptMandatory: () => void;
+  hasUserInteracted?: boolean;
   primaryColor?: string;
 }
 
@@ -89,6 +91,8 @@ export default function InlineSingleRowUI({
   onRejectAll,
   onConsentAll,
   onAcceptSelected,
+  onAcceptMandatory,
+  hasUserInteracted = false,
   primaryColor,
 }: InlineSingleRowUIProps) {
   const purposes = banner?.purposes || [];
@@ -119,6 +123,8 @@ export default function InlineSingleRowUI({
           onRejectAll={onRejectAll}
           onConsentAll={onConsentAll}
           onAcceptSelected={onAcceptSelected}
+          onAcceptMandatory={onAcceptMandatory}
+          hasUserInteracted={hasUserInteracted}
           purposes={purposes}
           actionButtonText={actionButtonText}
           primaryColor={settings.primary_color || primaryColor}

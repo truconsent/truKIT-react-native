@@ -20,6 +20,14 @@ export interface BannerUIProps {
   onRejectAll: () => void;
   onConsentAll: () => void;
   onAcceptSelected: () => void;
+  onAcceptMandatory: () => void;
+  hasUserInteracted?: boolean;
+  /** Matches truKIT-NPM's BannerUI.jsx `isBottomReached` — whether the user
+   * has scrolled through every purpose. Gates Reject All/Only Necessary/I
+   * Consent until true, unless there's only a single optional purpose
+   * (no scroll needed then). Defaults to `true` (no gating) for callers
+   * that don't track scroll position. */
+  isBottomReached?: boolean;
   onAcknowledgeNotice?: () => void;
   primaryColor?: string;
   secondaryColor?: string;
@@ -44,6 +52,9 @@ export default function BannerUI({
   onRejectAll,
   onConsentAll,
   onAcceptSelected,
+  onAcceptMandatory,
+  hasUserInteracted = false,
+  isBottomReached = true,
   onAcknowledgeNotice,
   primaryColor,
   secondaryColor,
@@ -269,20 +280,38 @@ export default function BannerUI({
 
         <View style={styles.footerWrapper}>
           <ModernBannerFooter footerText={footerText} orgName={companyName} theme={theme} translate={translate} />
-          <ModernBannerActions
-            onRejectAll={onRejectAll}
-            onConsentAll={onConsentAll}
-            onAcceptSelected={onAcceptSelected}
-            purposes={banner?.purposes || []}
-            actionButtonText={actionButtonText}
-            primaryColor={finalPrimaryColor}
-            theme={theme}
-            rejectAllColor={settings.reject_all_color}
-            rejectAllText={settings.reject_all_text}
-            onlyNecessaryColor={settings.only_necessary_color}
-            onlyNecessaryText={settings.only_necessary_text}
-            translate={translate}
-          />
+          {/* Matches truKIT-NPM's TabbedBannerUI.jsx: the Informational tab only ever
+           * advances to the Consent tab via "Next" — the actual accept/reject/only-
+           * necessary decision is made on the Consent tab, which is where the real
+           * action buttons belong. */}
+          {activeTab === 'informational' ? (
+            <TouchableOpacity
+              style={[styles.iUnderstandButton, { backgroundColor: finalPrimaryColor }]}
+              onPress={() => setActiveTab('consent')}
+            >
+              <Text style={[styles.iUnderstandButtonText, { color: theme.buttonText, fontFamily }]}>
+                {tr('Next', 'next')}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <ModernBannerActions
+              onRejectAll={onRejectAll}
+              onConsentAll={onConsentAll}
+              onAcceptSelected={onAcceptSelected}
+              onAcceptMandatory={onAcceptMandatory}
+              hasUserInteracted={hasUserInteracted}
+              isBottomReached={isBottomReached}
+              purposes={banner?.purposes || []}
+              actionButtonText={actionButtonText}
+              primaryColor={finalPrimaryColor}
+              theme={theme}
+              rejectAllColor={settings.reject_all_color}
+              rejectAllText={settings.reject_all_text}
+              onlyNecessaryColor={settings.only_necessary_color}
+              onlyNecessaryText={settings.only_necessary_text}
+              translate={translate}
+            />
+          )}
         </View>
       </View>
     );
@@ -340,6 +369,9 @@ export default function BannerUI({
           onRejectAll={onRejectAll}
           onConsentAll={onConsentAll}
           onAcceptSelected={onAcceptSelected}
+          onAcceptMandatory={onAcceptMandatory}
+          hasUserInteracted={hasUserInteracted}
+          isBottomReached={isBottomReached}
           purposes={banner?.purposes || []}
           actionButtonText={actionButtonText}
           primaryColor={finalPrimaryColor}

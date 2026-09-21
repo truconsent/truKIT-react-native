@@ -18,7 +18,17 @@ describe('deriveBannerThemeColors', () => {
       border: '#e5e7eb',
       fontFamily: undefined,
       fontSize: 16,
+      infoBg: '#eff6ff',
+      infoBorder: '#bfdbfe',
+      infoText: '#1e40af',
     });
+  });
+
+  it('uses dark-mode disclaimer presets when the resolved background is dark', () => {
+    const theme = deriveBannerThemeColors({ primary_color: '#000000' });
+    expect(theme.infoBg).toBe('#0a0c10');
+    expect(theme.infoBorder).toBe('#1e293b');
+    expect(theme.infoText).toBe('#60a5fa');
   });
 
   it('reads every "Common Appearance" field when configured', () => {

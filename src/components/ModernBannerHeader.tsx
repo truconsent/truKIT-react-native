@@ -208,8 +208,10 @@ export default function ModernBannerHeader({
           </Pressable>
         </Pressable>
       </Modal>
-      <View style={styles.disclaimer}>
-        <Text style={[styles.disclaimerText, { fontFamily }]}>{disclaimer}</Text>
+      {/* Matches truKIT-NPM's var(--banner-info-bg/border/text) — the disclaimer
+          box was fully hardcoded here, ignoring theme entirely. */}
+      <View style={[styles.disclaimer, { backgroundColor: theme?.infoBg ?? '#dbeafe', borderColor: theme?.infoBorder ?? '#93c5fd' }]}>
+        <Text style={[styles.disclaimerText, { fontFamily, color: theme?.infoText ?? '#1e40af' }]}>{disclaimer}</Text>
       </View>
       <View style={styles.divider} />
     </View>

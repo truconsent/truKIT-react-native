@@ -1,11 +1,12 @@
 {
   "name": "@truconsent/consent-notice-react-native",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "React Native SDK for TruConsent consent banner",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "files": [
     "src",
+    "assets",
     "README.md",
     "DOCUMENTATION.md",
     "INTEGRATION_GUIDE.md",
