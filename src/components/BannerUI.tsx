@@ -161,8 +161,8 @@ export default function BannerUI({
           onLanguageChange={onLanguageChange}
         />
         <View style={[styles.tabBar, { borderBottomColor: theme.border }]}>
-          <View style={[styles.tabButton, styles.tabButtonActive, { borderBottomColor: finalPrimaryColor }]}>
-            <Text style={[styles.tabText, { color: finalPrimaryColor, fontFamily }]}>{tr('Informational', 'informational')}</Text>
+          <View style={[styles.tabButton, styles.tabButtonActive, { borderBottomColor: theme.text }]}>
+            <Text style={[styles.tabText, { color: theme.text, fontFamily }]}>{tr('Informational', 'informational')}</Text>
           </View>
         </View>
         <View style={styles.purposesContainer}>
@@ -215,7 +215,7 @@ export default function BannerUI({
           <TouchableOpacity
             style={[
               styles.tabButton,
-              activeTab === 'informational' && [styles.tabButtonActive, { borderBottomColor: finalPrimaryColor }],
+              activeTab === 'informational' && [styles.tabButtonActive, { borderBottomColor: theme.text }],
             ]}
             onPress={() => setActiveTab('informational')}
           >
@@ -223,7 +223,7 @@ export default function BannerUI({
               style={[
                 styles.tabText,
                 { fontFamily },
-                activeTab === 'informational' ? { color: finalPrimaryColor } : { color: theme.textMuted },
+                activeTab === 'informational' ? { color: theme.text } : { color: theme.textMuted },
               ]}
             >
               {tr('Informational', 'informational')}
@@ -232,7 +232,7 @@ export default function BannerUI({
           <TouchableOpacity
             style={[
               styles.tabButton,
-              activeTab === 'consent' && [styles.tabButtonActive, { borderBottomColor: finalPrimaryColor }],
+              activeTab === 'consent' && [styles.tabButtonActive, { borderBottomColor: theme.text }],
             ]}
             onPress={() => setActiveTab('consent')}
           >
@@ -240,7 +240,7 @@ export default function BannerUI({
               style={[
                 styles.tabText,
                 { fontFamily },
-                activeTab === 'consent' ? { color: finalPrimaryColor } : { color: theme.textMuted },
+                activeTab === 'consent' ? { color: theme.text } : { color: theme.textMuted },
               ]}
             >
               {tr('Consent', 'consent')}

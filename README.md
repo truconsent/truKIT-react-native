@@ -4,6 +4,10 @@ React Native SDK for TruConsent consent banner. This package provides native mob
 
 ## Changelog
 
+### 0.1.7
+
+- Changed the Tabbed Banner's active tab label and underline to use Primary Text Color (`theme.text`) instead of Button Color (`theme.button`) — Button Color is picked for contrast against a button's own background, not the banner's background, so a light banner paired with a bright accent Button Color read as low-contrast for the active tab. Primary Text Color is guaranteed legible against the banner's own background. Matches `@truconsent/consent-notice` 0.0.36 and truKIT-flutter-sdk
+
 ### 0.1.6
 
 Three-way parity audit against `@truconsent/consent-notice` (the reference web SDK) — Consent Notice, Rights Center, and their underlying logic, not just appearance:
