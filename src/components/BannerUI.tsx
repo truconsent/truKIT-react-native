@@ -266,8 +266,8 @@ export default function BannerUI({
         ) : (
           <View style={styles.purposesContainer}>
             {renderPurposeGroup('Necessary', necessaryPurposes)}
-            {renderPurposeGroup('Optional', optionalRegularPurposes)}
             {renderPurposeGroup('Profile Based', profileBasedPurposes)}
+            {renderPurposeGroup('Optional', optionalRegularPurposes)}
             {consentPurposes.length === 0 && (
               <View style={styles.emptyState}>
                 <Text style={[styles.emptyStateText, { color: theme.textMuted, fontFamily }]}>
@@ -337,8 +337,8 @@ export default function BannerUI({
         {banner?.purposes && banner.purposes.length > 0 ? (
           <>
             {renderPurposeGroup('Necessary', necessaryPurposes)}
-            {renderPurposeGroup('Optional', optionalRegularPurposes)}
             {renderPurposeGroup('Profile Based', profileBasedPurposes)}
+            {renderPurposeGroup('Optional', optionalRegularPurposes)}
             {necessaryPurposes.length === 0 &&
               optionalRegularPurposes.length === 0 &&
               profileBasedPurposes.length === 0 &&

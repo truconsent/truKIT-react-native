@@ -4,6 +4,11 @@ React Native SDK for TruConsent consent banner. This package provides native mob
 
 ## Changelog
 
+### 0.1.8
+
+- Fixed `I Consent` being disabled whenever every optional purpose was declined, requiring at least one optional acceptance on top of the normal scroll-gating — Reject All and Only Necessary never had this extra requirement. Optional purposes are the user's free choice to accept or decline; `Only Necessary` already exists as the dedicated "decline everything optional" action, so gating `I Consent` on an optional acceptance just made it redundant with `Only Necessary` and confusingly disabled in the all-declined state
+- Fixed the Consent tab's purpose groups rendering in `Necessary → Optional → Profile Based` order — now `Necessary → Profile Based → Optional`, matching `@truconsent/consent-notice` 0.0.37
+
 ### 0.1.7
 
 - Changed the Tabbed Banner's active tab label and underline to use Primary Text Color (`theme.text`) instead of Button Color (`theme.button`) — Button Color is picked for contrast against a button's own background, not the banner's background, so a light banner paired with a bright accent Button Color read as low-contrast for the active tab. Primary Text Color is guaranteed legible against the banner's own background. Matches `@truconsent/consent-notice` 0.0.36 and truKIT-flutter-sdk

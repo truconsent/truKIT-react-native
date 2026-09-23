@@ -68,13 +68,9 @@ export default function ModernBannerActions({
   const anyOptionalAccepted = hasOptionalAccepted(purposes);
   // Legitimate Interest purposes are never toggleable (no switch is even
   // rendered for them — see ModernPurposeCard.tsx) and can never be
-  // "accepted" by the user, so they must not count toward "optional
-  // purposes exist" — otherwise a banner with only Legitimate Interest +
-  // mandatory purposes (no real optional consent purpose at all) would
-  // permanently disable "I Consent", since anyOptionalAccepted can never
-  // become true. Matches hasOptionalAccepted's own filter.
+  // "accepted" by the user, so they must not count as a real optional
+  // purpose to review. Matches hasOptionalAccepted's own filter.
   const optionalPurposes = purposes.filter((p) => !p.is_mandatory && !p.is_legitimate);
-  const hasOptional = optionalPurposes.length > 0;
   // Matches truKIT-NPM's ModernBannerActions.jsx exactly: scrolling isn't
   // required when there's only a single optional purpose to review.
   const isSinglePurpose = optionalPurposes.length === 1;
@@ -98,7 +94,16 @@ export default function ModernBannerActions({
   // *label* never changes ("I Consent"/actionButtonText, always) — only its
   // handler switches, once the user has an optional purpose accepted or has
   // interacted with a toggle this session.
-  const isIConsentEnabled = isActionsEnabled && (hasOptional ? anyOptionalAccepted : true);
+  //
+  // All three actions share the same gate: bottom reached (or single
+  // purpose). This previously also required at least one optional purpose to
+  // be accepted — but "optional" means the user is free to decline every one
+  // of them and still explicitly consent to that choice (that's what the
+  // button records); Only Necessary already exists as the dedicated "decline
+  // all optional" action, so gating I Consent on an optional acceptance just
+  // made it redundant with Only Necessary and confusingly disabled in the
+  // all-declined state. Matches truKIT-NPM's ModernBannerActions.jsx fix.
+  const isIConsentEnabled = isActionsEnabled;
   const fontFamily = theme?.fontFamily;
   const buttonColor = theme?.button ?? primaryColor;
   const buttonTextColor = theme?.buttonText ?? 'white';
