@@ -103,7 +103,15 @@ export default function ModernBannerActions({
   // all optional" action, so gating I Consent on an optional acceptance just
   // made it redundant with Only Necessary and confusingly disabled in the
   // all-declined state. Matches truKIT-NPM's ModernBannerActions.jsx fix.
-  const isIConsentEnabled = isActionsEnabled;
+  //
+  // Necessary purposes' toggles stay interactive (the user can still switch
+  // one off), but "I Consent" specifically must not be clickable while any
+  // of them is off — Only Necessary/Reject All remain unaffected, since
+  // those are separate, always-available decline actions.
+  const hasDeclinedMandatory = purposes.some(
+    (p) => p.is_mandatory && !p.is_legitimate && (p.consented === 'declined' || (p.consented as any) === false)
+  );
+  const isIConsentEnabled = isActionsEnabled && !hasDeclinedMandatory;
   const fontFamily = theme?.fontFamily;
   const buttonColor = theme?.button ?? primaryColor;
   const buttonTextColor = theme?.buttonText ?? 'white';

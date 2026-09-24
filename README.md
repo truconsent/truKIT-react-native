@@ -4,6 +4,10 @@ React Native SDK for TruConsent consent banner. This package provides native mob
 
 ## Changelog
 
+### 0.1.9
+
+- Fixed `I Consent` staying enabled (and clickable) even when the user switched a Necessary/mandatory purpose's toggle off. Necessary toggles stay interactive by design — the user can still switch one off — but doing so must disable the "I Consent" action itself; only Reject All / Only Necessary remain available at that point, matching the existing H-Case warning popup's own definition of "mandatory purpose declined". Matches `@truconsent/consent-notice` 0.0.38
+
 ### 0.1.8
 
 - Fixed `I Consent` being disabled whenever every optional purpose was declined, requiring at least one optional acceptance on top of the normal scroll-gating — Reject All and Only Necessary never had this extra requirement. Optional purposes are the user's free choice to accept or decline; `Only Necessary` already exists as the dedicated "decline everything optional" action, so gating `I Consent` on an optional acceptance just made it redundant with `Only Necessary` and confusingly disabled in the all-declined state
